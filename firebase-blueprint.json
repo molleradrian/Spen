@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "Drawing": {
+      "title": "Drawing",
+      "description": "User created drawings",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the owner"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the drawing"
+        },
+        "dataUrl": {
+          "type": "string",
+          "description": "Base64 image representation"
+        },
+        "strokes": {
+          "type": "string",
+          "description": "JSON stringified strokes array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "dataUrl", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "drawings": {
+      "schema": "Drawing",
+      "description": "Collection of drawings"
+    }
+  }
+}

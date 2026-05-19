@@ -1,0 +1,6 @@
+{
+  "name": "S Pen Draw",
+  "description": "A precision drawing app optimized for S Pen input, featuring cloud storage for your sketches and Gemini AI to provide design inspiration and remix ideas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
