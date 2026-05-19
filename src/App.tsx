@@ -20,7 +20,11 @@ import {
   LogOut,
   ChevronRight,
   Plus,
-  Pipette
+  Pipette,
+  Layers,
+  Eye,
+  EyeOff,
+  Trash
 } from 'lucide-react';
 import { 
   collection, 
@@ -51,6 +55,14 @@ interface Stroke {
   color: string;
   width: number;
   mode: 'draw' | 'erase';
+}
+
+interface DrawingLayer {
+  id: string;
+  name: string;
+  strokes: Stroke[];
+  visible: boolean;
+  opacity: number;
 }
 
 interface Drawing {
@@ -93,7 +105,10 @@ export default function App() {
   // Canvas State
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
-  const [history, setHistory] = useState<Stroke[]>([]);
+  const [layers, setLayers] = useState<DrawingLayer[]>([
+    { id: 'layer-1', name: 'Background', strokes: [], visible: true, opacity: 1 }
+  ]);
+  const [activeLayerId, setActiveLayerId] = useState('layer-1');
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
   
   // Tool State
@@ -109,6 +124,7 @@ export default function App() {
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [selectedDrawingForAi, setSelectedDrawingForAi] = useState<Drawing | null>(null);
+  const [showLayers, setShowLayers] = useState(false);
 
   const colorInputRef = useRef<HTMLInputElement>(null);
 
@@ -154,10 +170,18 @@ export default function App() {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    const drawStroke = (stroke: Stroke) => {
+    const drawStroke = (stroke: Stroke, layerOpacity: number = 1) => {
       if (stroke.points.length < 1) return;
       ctx.globalCompositeOperation = stroke.mode === 'erase' ? 'destination-out' : 'source-over';
-      ctx.strokeStyle = stroke.mode === 'erase' ? 'rgba(0,0,0,1)' : stroke.color;
+      
+      // Handle color with layer opacity
+      if (stroke.mode !== 'erase') {
+        ctx.globalAlpha = layerOpacity;
+        ctx.strokeStyle = stroke.color;
+      } else {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = 'rgba(0,0,0,1)';
+      }
 
       if (stroke.points.length === 1) {
         const p = stroke.points[0];
@@ -178,13 +202,20 @@ export default function App() {
         ctx.beginPath();
         ctx.moveTo(p2.x, p2.y);
       }
+      ctx.globalAlpha = 1; // Reset
     };
 
-    history.forEach(drawStroke);
-    if (isDrawing && currentStroke.length > 0) {
-      drawStroke({ points: currentStroke, color, width: baseWidth, mode });
-    }
-  }, [history, currentStroke, isDrawing, color, baseWidth, mode]);
+    layers.forEach(layer => {
+      if (!layer.visible) return;
+      layer.strokes.forEach(s => drawStroke(s, layer.opacity));
+      
+      // Draw preview for current stroke if this is the active layer
+      if (layer.id === activeLayerId && isDrawing && currentStroke.length > 0) {
+        drawStroke({ points: currentStroke, color, width: baseWidth, mode }, layer.opacity);
+      }
+    });
+
+  }, [layers, activeLayerId, currentStroke, isDrawing, color, baseWidth, mode]);
 
   useEffect(() => {
     redraw();
@@ -233,7 +264,15 @@ export default function App() {
     if (!isDrawing) return;
     setIsDrawing(false);
     if (currentStroke.length > 0) {
-      setHistory(prev => [...prev, { points: currentStroke, color, width: baseWidth, mode }]);
+      setLayers(prev => prev.map(layer => {
+        if (layer.id === activeLayerId) {
+          return {
+            ...layer,
+            strokes: [...layer.strokes, { points: currentStroke, color, width: baseWidth, mode }]
+          };
+        }
+        return layer;
+      }));
     }
     setCurrentStroke([]);
   };
@@ -241,27 +280,42 @@ export default function App() {
   // --- Actions ---
 
   const undo = () => {
-    if (history.length === 0) return;
-    const last = history[history.length - 1];
-    setHistory(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, last]);
+    setLayers(prev => prev.map(layer => {
+      if (layer.id === activeLayerId) {
+        if (layer.strokes.length === 0) return layer;
+        const last = layer.strokes[layer.strokes.length - 1];
+        setRedoStack(r => [...r, last]);
+        return {
+          ...layer,
+          strokes: layer.strokes.slice(0, -1)
+        };
+      }
+      return layer;
+    }));
   };
 
   const redo = () => {
     if (redoStack.length === 0) return;
     const last = redoStack[redoStack.length - 1];
-    setRedoStack(prev => prev.slice(0, -1));
-    setHistory(prev => [...prev, last]);
+    setRedoStack(r => r.slice(0, -1));
+    setLayers(prev => prev.map(layer => {
+      if (layer.id === activeLayerId) {
+        return {
+          ...layer,
+          strokes: [...layer.strokes, last]
+        };
+      }
+      return layer;
+    }));
   };
 
   const clear = () => {
-    // Check if there is anything to clear first
-    if (history.length === 0) return;
+    const hasStrokes = layers.some(l => l.strokes.length > 0);
+    if (!hasStrokes) return;
     
     if (window.confirm('Clear your current workspace? This action cannot be undone.')) {
-      setHistory([]);
+      setLayers(prev => prev.map(l => ({ ...l, strokes: [] })));
       setRedoStack([]);
-      // Reset modes
       setMode('draw');
       setAiInspiration(null);
     }
@@ -272,14 +326,14 @@ export default function App() {
       signIn();
       return;
     }
-    if (history.length === 0) return;
+    const hasStrokes = layers.some(l => l.strokes.length > 0);
+    if (!hasStrokes) return;
     
     setIsSaving(true);
     try {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      // Extract high-quality thumbnail
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = canvas.width;
       tempCanvas.height = canvas.height;
@@ -296,7 +350,7 @@ export default function App() {
         userId: user.uid,
         title: `Sketch ${new Date().toLocaleDateString()}`,
         dataUrl,
-        strokes: JSON.stringify(history),
+        strokes: JSON.stringify(layers),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
@@ -334,10 +388,60 @@ export default function App() {
 
   const loadFromGallery = (drawing: Drawing) => {
     if (drawing.strokes) {
-      setHistory(JSON.parse(drawing.strokes));
-      setRedoStack([]);
-      setShowGallery(false);
+      try {
+        const loaded = JSON.parse(drawing.strokes);
+        if (Array.isArray(loaded) && loaded[0]?.name) {
+          // It's the new layer format
+          setLayers(loaded);
+          setActiveLayerId(loaded[loaded.length - 1].id);
+        } else {
+          // Old format
+          setLayers([{
+            id: 'layer-1',
+            name: 'Imported',
+            strokes: loaded,
+            visible: true,
+            opacity: 1
+          }]);
+          setActiveLayerId('layer-1');
+        }
+        setRedoStack([]);
+        setShowGallery(false);
+      } catch (e) {
+        console.error("Failed to load drawing strokes", e);
+      }
     }
+  };
+
+  const addLayer = () => {
+    const newId = `layer-${Date.now()}`;
+    setLayers(prev => [...prev, {
+      id: newId,
+      name: `Layer ${prev.length + 1}`,
+      strokes: [],
+      visible: true,
+      opacity: 1
+    }]);
+    setActiveLayerId(newId);
+  };
+
+  const deleteLayer = (id: string) => {
+    if (layers.length <= 1) return;
+    setLayers(prev => {
+      const filtered = prev.filter(l => l.id !== id);
+      if (activeLayerId === id) {
+        setActiveLayerId(filtered[filtered.length - 1].id);
+      }
+      return filtered;
+    });
+  };
+
+  const toggleLayerVisibility = (id: string) => {
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, visible: !l.visible } : l));
+  };
+
+  const setLayerOpacity = (id: string, opacity: number) => {
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, opacity } : l));
   };
 
   const deleteDrawing = async (id: string) => {
@@ -464,7 +568,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-1">
-              <ActionButton onClick={undo} disabled={history.length === 0} icon={<Undo size={16} />} />
+              <ActionButton onClick={undo} disabled={layers.find(l => l.id === activeLayerId)?.strokes.length === 0} icon={<Undo size={16} />} />
               <ActionButton onClick={redo} disabled={redoStack.length === 0} icon={<Redo size={16} />} />
               <ActionButton onClick={clear} icon={<Trash2 size={16} />} />
               <ActionButton onClick={saveToGallery} icon={<Save size={16} className={isSaving ? 'animate-pulse' : ''} />} />
@@ -477,8 +581,70 @@ export default function App() {
               >
                 {backgroundType || 'BG'}
               </button>
+              <ActionButton onClick={() => setShowLayers(!showLayers)} active={showLayers} icon={<Layers size={16} />} />
               <ActionButton onClick={() => setShowGallery(true)} icon={<Grid2X2 size={16} />} />
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Layers Panel */}
+      <AnimatePresence>
+        {showLayers && !showGallery && (
+          <motion.div
+            initial={{ x: 300, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 300, opacity: 0 }}
+            className="absolute top-24 right-8 w-64 bg-white/90 backdrop-blur-xl border border-black/10 rounded-3xl shadow-2xl z-50 p-6 flex flex-col gap-6"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-black uppercase italic tracking-tighter text-sm">Layers</h3>
+              <button onClick={addLayer} className="p-1 hover:bg-black/5 rounded-full">
+                <Plus size={18} />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-2 max-h-[40vh] overflow-y-auto pr-2">
+              {[...layers].reverse().map(layer => (
+                <div 
+                  key={layer.id}
+                  onClick={() => setActiveLayerId(layer.id)}
+                  className={`group flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer ${activeLayerId === layer.id ? 'bg-black text-white border-black shadow-lg scale-102' : 'bg-transparent border-black/5 hover:border-black/20'}`}
+                >
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id); }}
+                    className={`transition-opacity ${activeLayerId === layer.id ? 'text-white/40 hover:text-white' : 'text-black/40 hover:text-black'}`}
+                  >
+                    {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                  </button>
+                  <div className="flex-1">
+                    <p className="text-[10px] font-bold uppercase tracking-tight truncate">{layer.name}</p>
+                    <input 
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={layer.opacity}
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => setLayerOpacity(layer.id, parseFloat(e.target.value))}
+                      className={`w-full h-0.5 mt-1 appearance-none bg-current opacity-20 accent-current`}
+                    />
+                  </div>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); deleteLayer(layer.id); }}
+                    className={`opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500 hover:text-white rounded-md ${activeLayerId === layer.id ? 'text-white/40' : 'text-black/40'}`}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button 
+              onClick={() => setShowLayers(false)}
+              className="mt-2 w-full py-2 bg-black/5 hover:bg-black/10 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center"
+            >
+              Close
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -596,7 +762,7 @@ export default function App() {
         <div className="absolute top-6 left-24 flex flex-col gap-0.5 pointer-events-none opacity-30">
           <h1 className="text-[10px] font-black tracking-tighter uppercase italic">S Pen Draw Pro</h1>
           <p className="text-[8px] font-mono uppercase tracking-[0.2em]">
-            {history.length} STROKES • {mode.toUpperCase()}
+            {layers.reduce((sum, l) => sum + l.strokes.length, 0)} STROKES • {layers.length} LAYERS • {mode.toUpperCase()}
           </p>
         </div>
       )}
@@ -668,12 +834,12 @@ function ToolButton({ active, onClick, icon, label }: { active: boolean; onClick
   );
 }
 
-function ActionButton({ onClick, disabled, icon }: { onClick: () => void; disabled?: boolean; icon: React.ReactNode }) {
+function ActionButton({ onClick, disabled, active, icon }: { onClick: () => void; disabled?: boolean; active?: boolean; icon: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className="p-2 rounded-xl hover:bg-black/5 disabled:opacity-10 disabled:cursor-not-allowed transition-colors"
+      className={`p-2 rounded-xl transition-colors ${active ? 'bg-black text-white' : 'hover:bg-black/5 opacity-40 hover:opacity-100'} disabled:opacity-10 disabled:cursor-not-allowed`}
     >
       {icon}
     </button>
