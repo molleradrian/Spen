@@ -24,7 +24,13 @@ import {
   Layers,
   Eye,
   EyeOff,
-  Trash
+  Trash,
+  Home,
+  Settings,
+  Clock,
+  Palette,
+  Sliders,
+  Hand
 } from 'lucide-react';
 import { 
   collection, 
@@ -40,6 +46,7 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { db, auth, signIn, signOut } from './firebase';
+import LandingPage from './components/LandingPage';
 
 // --- Types ---
 
@@ -91,6 +98,69 @@ const getPseudoPressure = (event: React.PointerEvent | PointerEvent) => {
   return event.pressure > 0 ? event.pressure : 0.5;
 };
 
+const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
+  const shorthandRegex = /^#?([a-f\d])([a-f\d])([a-f\d])$/i;
+  const fullHex = hex.replace(shorthandRegex, (_, r, g, b) => r + r + g + g + b + b);
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(fullHex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 0, g: 0, b: 0 };
+};
+
+const rgbToHex = (r: number, g: number, b: number): string => {
+  const clamp = (val: number) => Math.max(0, Math.min(255, Math.round(val)));
+  return "#" + ((1 << 24) + (clamp(r) << 16) + (clamp(g) << 8) + clamp(b)).toString(16).slice(1).toUpperCase();
+};
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -98,7 +168,11 @@ export default function App() {
   // App State
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showLanding, setShowLanding] = useState(true);
   const [showGallery, setShowGallery] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [testPressure, setTestPressure] = useState(0.5);
+  const [isTestingPressure, setIsTestingPressure] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   
@@ -117,7 +191,123 @@ export default function App() {
   const [mode, setMode] = useState<'draw' | 'erase'>('draw');
   const [showToolbar, setShowToolbar] = useState(true);
   const [backgroundType, setBackgroundType] = useState<'none' | 'dots' | 'grid' | 'lines'>('dots');
-  const [penOnly, setPenOnly] = useState(false);
+  const [penOnly, setPenOnly] = useState(() => {
+    try {
+      const focusVal = localStorage.getItem('s_pen_focus_mode');
+      if (focusVal) return focusVal === 'pen';
+      const val = localStorage.getItem('s_pen_allow_touch');
+      return val ? JSON.parse(val) === false : false;
+    } catch {
+      return false;
+    }
+  });
+
+  // Focus Mode State: Switching between 'touch' (finger and mouse) and 'pen' (active stylus/S Pen drawing only)
+  const [focusMode, setFocusMode] = useState<'touch' | 'pen'>(() => {
+    try {
+      const val = localStorage.getItem('s_pen_focus_mode');
+      if (val === 'pen' || val === 'touch') return val;
+      const legacyTouch = localStorage.getItem('s_pen_allow_touch');
+      return (legacyTouch && JSON.parse(legacyTouch) === false) ? 'pen' : 'touch';
+    } catch {
+      return 'touch';
+    }
+  });
+
+  // Input Filtering for Finger Touch, Mouse, and Generic Pens
+  const [allowPen, setAllowPen] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_allow_pen');
+      return val ? JSON.parse(val) : true;
+    } catch {
+      return true;
+    }
+  });
+  const [allowTouch, setAllowTouch] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_allow_touch');
+      return val ? JSON.parse(val) : true;
+    } catch {
+      return true;
+    }
+  });
+  const [allowMouse, setAllowMouse] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_allow_mouse');
+      return val ? JSON.parse(val) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const [simulationMode, setSimulationMode] = useState<'constant' | 'velocity'>(() => {
+    try {
+      const val = localStorage.getItem('s_pen_simulation_mode');
+      return val ? (val as 'constant' | 'velocity') : 'velocity';
+    } catch {
+      return 'velocity';
+    }
+  });
+
+  const [constantPressureMultiplier, setConstantPressureMultiplier] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_constant_pressure_multiplier');
+      return val ? parseFloat(val) : 0.5;
+    } catch {
+      return 0.5;
+    }
+  });
+
+  // Explicit focus mode toggler with physical S-Pen palm rejection sync
+  const setFocusModeExplicit = useCallback((newMode: 'touch' | 'pen') => {
+    setFocusMode(newMode);
+    const isPenFocus = newMode === 'pen';
+    setPenOnly(isPenFocus);
+    setAllowPen(true);
+    setAllowTouch(!isPenFocus);
+    setAllowMouse(!isPenFocus);
+    try {
+      localStorage.setItem('s_pen_focus_mode', newMode);
+      localStorage.setItem('s_pen_allow_pen', 'true');
+      localStorage.setItem('s_pen_allow_touch', JSON.stringify(!isPenFocus));
+      localStorage.setItem('s_pen_allow_mouse', JSON.stringify(!isPenFocus));
+    } catch {}
+  }, []);
+
+  const toggleFocusMode = useCallback(() => {
+    const nextVal = focusMode === 'touch' ? 'pen' : 'touch';
+    setFocusModeExplicit(nextVal);
+  }, [focusMode, setFocusModeExplicit]);
+
+  const toggleStylusLock = () => {
+    toggleFocusMode();
+  };
+
+  // Pressure Sensitivity Mapping Config
+  const [pressureOffset, setPressureOffset] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_pressure_offset');
+      return val ? parseFloat(val) : 1.0;
+    } catch {
+      return 1.0;
+    }
+  });
+  const [pressureScale, setPressureScale] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_pressure_scale');
+      return val ? parseFloat(val) : 5.0; // Defaults to 1.0 + 5.0 * pressure style
+    } catch {
+      return 5.0;
+    }
+  });
+  const [useRawCustomFormula, setUseRawCustomFormula] = useState(() => {
+    try {
+      const val = localStorage.getItem('s_pen_use_raw_formula');
+      return val ? JSON.parse(val) : true;
+    } catch {
+      return true;
+    }
+  });
 
   // Gemini State
   const [aiInspiration, setAiInspiration] = useState<string | null>(null);
@@ -125,6 +315,47 @@ export default function App() {
   const [aiPrompt, setAiPrompt] = useState("");
   const [selectedDrawingForAi, setSelectedDrawingForAi] = useState<Drawing | null>(null);
   const [showLayers, setShowLayers] = useState(false);
+
+  // Custom Color Studio State
+  const [showColorStudio, setShowColorStudio] = useState(false);
+  const [customSwatches, setCustomSwatches] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('s_pen_custom_swatches');
+      return saved ? JSON.parse(saved) : ['#06D6A0', '#457B9D', '#E63946', '#FFB703', '#7209B7'];
+    } catch {
+      return ['#06D6A0', '#457B9D', '#E63946', '#FFB703', '#7209B7'];
+    }
+  });
+
+  const rgb = useMemo(() => hexToRgb(color), [color]);
+
+  const handleRgbChange = (channel: 'r' | 'g' | 'b', value: number) => {
+    const newRgb = { ...rgb, [channel]: value };
+    const nextHex = rgbToHex(newRgb.r, newRgb.g, newRgb.b);
+    setColor(nextHex);
+    setMode('draw');
+  };
+
+  const addCurrentColorToSwatches = () => {
+    if (customSwatches.includes(color)) return;
+    const updated = [color, ...customSwatches.slice(0, 11)]; // limit to last 12 custom swatches
+    setCustomSwatches(updated);
+    try {
+      localStorage.setItem('s_pen_custom_swatches', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const removeSwatch = (swatchColor: string) => {
+    const updated = customSwatches.filter(s => s !== swatchColor);
+    setCustomSwatches(updated);
+    try {
+      localStorage.setItem('s_pen_custom_swatches', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const colorInputRef = useRef<HTMLInputElement>(null);
 
@@ -153,6 +384,8 @@ export default function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Drawing));
       setDrawings(docs);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'drawings');
     });
 
     return unsubscribe;
@@ -186,7 +419,10 @@ export default function App() {
       if (stroke.points.length === 1) {
         const p = stroke.points[0];
         ctx.beginPath();
-        ctx.arc(p.x, p.y, (stroke.width * p.pressure) / 2, 0, Math.PI * 2);
+        const strokeWidth = useRawCustomFormula 
+          ? (pressureOffset + pressureScale * p.pressure)
+          : stroke.width * (pressureOffset + pressureScale * p.pressure);
+        ctx.arc(p.x, p.y, strokeWidth / 2, 0, Math.PI * 2);
         ctx.fillStyle = ctx.strokeStyle;
         ctx.fill();
         return;
@@ -196,7 +432,10 @@ export default function App() {
       ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
       for (let i = 1; i < stroke.points.length; i++) {
         const p2 = stroke.points[i];
-        ctx.lineWidth = stroke.width * p2.pressure;
+        const strokeWidth = useRawCustomFormula 
+          ? (pressureOffset + pressureScale * p2.pressure)
+          : stroke.width * (pressureOffset + pressureScale * p2.pressure);
+        ctx.lineWidth = strokeWidth;
         ctx.lineTo(p2.x, p2.y);
         ctx.stroke();
         ctx.beginPath();
@@ -215,7 +454,7 @@ export default function App() {
       }
     });
 
-  }, [layers, activeLayerId, currentStroke, isDrawing, color, baseWidth, mode]);
+  }, [layers, activeLayerId, currentStroke, isDrawing, color, baseWidth, mode, pressureOffset, pressureScale, useRawCustomFormula]);
 
   useEffect(() => {
     redraw();
@@ -239,25 +478,73 @@ export default function App() {
 
   // --- Pointer Events ---
 
+  const testLastPointRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
+
+  const getPointerPressure = (e: React.PointerEvent, customPrevPoints?: Point[]) => {
+    // If it's a pen and has native pressure, use it
+    if (e.pointerType === 'pen' && e.pressure > 0) {
+      return e.pressure;
+    }
+
+    if (simulationMode === 'velocity') {
+      const activePoints = customPrevPoints !== undefined ? customPrevPoints : currentStroke;
+      if (activePoints.length > 0) {
+        const lastPoint = activePoints[activePoints.length - 1];
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        const currentT = Date.now();
+
+        const dx = currentX - lastPoint.x;
+        const dy = currentY - lastPoint.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const dt = Math.max(1, currentT - lastPoint.timestamp);
+
+        const speed = distance / dt; // pixels per ms
+
+        // Map speed to pressure range: slower drawing = thicker stroke, faster drawing = thinner stroke
+        const maxSpeed = 3.5;
+        const minPressure = 0.15;
+        const maxPressure = 1.0;
+        const ratio = Math.min(1, speed / maxSpeed);
+        
+        return maxPressure - (maxPressure - minPressure) * ratio;
+      }
+    }
+
+    return constantPressureMultiplier;
+  };
+
+  const isAllowedInput = (pointerType: string) => {
+    if (focusMode === 'pen') {
+      return pointerType === 'pen';
+    } else {
+      return pointerType === 'touch' || pointerType === 'mouse';
+    }
+  };
+
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (showGallery) return;
-    if (penOnly && e.pointerType !== 'pen') return;
+    if (showGallery || showDashboard) return;
+    if (!isAllowedInput(e.pointerType)) return;
     e.preventDefault();
     setIsDrawing(true);
     setRedoStack([]);
     const rect = canvasRef.current!.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    setCurrentStroke([{ x, y, pressure: getPseudoPressure(e), timestamp: Date.now() }]);
+    const pressureVal = getPointerPressure(e, []);
+    setCurrentStroke([{ x, y, pressure: pressureVal, timestamp: Date.now() }]);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDrawing) return;
+    if (!isAllowedInput(e.pointerType)) return;
     e.preventDefault();
     const rect = canvasRef.current!.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    setCurrentStroke(prev => [...prev, { x, y, pressure: getPseudoPressure(e), timestamp: Date.now() }]);
+    const pressureVal = getPointerPressure(e);
+    setCurrentStroke(prev => [...prev, { x, y, pressure: pressureVal, timestamp: Date.now() }]);
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -275,6 +562,48 @@ export default function App() {
       }));
     }
     setCurrentStroke([]);
+  };
+
+  const handleTestPointerMove = (e: React.PointerEvent) => {
+    if (!isAllowedInput(e.pointerType)) return;
+    
+    let pressure = constantPressureMultiplier;
+    if (e.pointerType === 'pen' && e.pressure > 0) {
+      pressure = e.pressure;
+    } else if (simulationMode === 'velocity') {
+      const parentRect = e.currentTarget.getBoundingClientRect();
+      const currentX = e.clientX - parentRect.left;
+      const currentY = e.clientY - parentRect.top;
+      const currentT = Date.now();
+      
+      if (testLastPointRef.current) {
+        const last = testLastPointRef.current;
+        const dx = currentX - last.x;
+        const dy = currentY - last.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const dt = Math.max(1, currentT - last.timestamp);
+        const speed = distance / dt;
+        
+        const maxSpeed = 3.5;
+        const minPressure = 0.15;
+        const maxPressure = 1.0;
+        const ratio = Math.min(1, speed / maxSpeed);
+        pressure = maxPressure - (maxPressure - minPressure) * ratio;
+      }
+      testLastPointRef.current = { x: currentX, y: currentY, timestamp: currentT };
+    }
+
+    if (e.buttons > 0) {
+      setTestPressure(pressure);
+      setIsTestingPressure(true);
+    } else if (e.pointerType === 'pen') {
+      setTestPressure(pressure);
+    }
+  };
+
+  const handleTestPointerUp = () => {
+    setIsTestingPressure(false);
+    testLastPointRef.current = null;
   };
 
   // --- Actions ---
@@ -346,14 +675,19 @@ export default function App() {
 
       const dataUrl = tempCanvas.toDataURL('image/png', 0.8);
       
-      await addDoc(collection(db, 'drawings'), {
-        userId: user.uid,
-        title: `Sketch ${new Date().toLocaleDateString()}`,
-        dataUrl,
-        strokes: JSON.stringify(layers),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
+      try {
+        await addDoc(collection(db, 'drawings'), {
+          userId: user.uid,
+          title: `Sketch ${new Date().toLocaleDateString()}`,
+          dataUrl,
+          strokes: JSON.stringify(layers),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      } catch (firestoreErr) {
+        handleFirestoreError(firestoreErr, OperationType.CREATE, 'drawings');
+        return;
+      }
 
       alert('Saved to gallery!');
     } catch (err) {
@@ -446,7 +780,11 @@ export default function App() {
 
   const deleteDrawing = async (id: string) => {
     if (window.confirm('Delete this masterpiece?')) {
-      await deleteDoc(doc(db, 'drawings', id));
+      try {
+        await deleteDoc(doc(db, 'drawings', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `drawings/${id}`);
+      }
     }
   };
 
@@ -480,23 +818,63 @@ export default function App() {
         onPointerLeave={handlePointerUp}
       />
 
-      {/* Auth Indicator */}
-      <div className="absolute top-6 left-6 z-40 flex items-center gap-3">
+      {/* Top Center Focus Mode Switch (Manual Touch & Pen Focus Toggle) */}
+      {!showGallery && !showDashboard && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-45 flex items-center bg-white/80 backdrop-blur-md p-1 rounded-full border border-black/10 shadow-lg pointer-events-auto">
+          <button
+            onClick={() => setFocusModeExplicit('touch')}
+            className={`px-3.5 py-1.5 rounded-full flex items-center gap-1.5 text-[10px] uppercase font-extrabold tracking-wider transition-all duration-250 ${
+              focusMode === 'touch'
+                ? 'bg-black text-white shadow-sm scale-102'
+                : 'text-zinc-500 hover:text-zinc-805 hover:bg-black/5'
+            }`}
+            title="Switch Focus to touch and mouse control (Fingers / generic pens draw freely)"
+          >
+            <Hand size={11} />
+            <span>Touch Focus</span>
+          </button>
+          
+          <button
+            onClick={() => setFocusModeExplicit('pen')}
+            className={`px-3.5 py-1.5 rounded-full flex items-center gap-1.5 text-[10px] uppercase font-extrabold tracking-wider transition-all duration-250 ${
+              focusMode === 'pen'
+                ? 'bg-black text-white shadow-sm scale-102'
+                : 'text-zinc-500 hover:text-zinc-805 hover:bg-black/5'
+            }`}
+            title="Switch Focus to Pen drawing only (Disables touch to act as full hardware palm rejection)"
+          >
+            <Pencil size={11} />
+            <span>Pen Focus</span>
+          </button>
+        </div>
+      )}
+
+      {/* Auth Indicator / Home Dashboard Shortcut */}
+      <div className="absolute top-6 left-6 z-40 flex items-center gap-2">
+        <button 
+          onClick={() => setShowLanding(true)}
+          className="flex items-center gap-1.5 px-3.5 py-2 bg-white/80 backdrop-blur hover:bg-white text-zinc-800 rounded-full text-[10.5px] uppercase font-bold border border-black/10 shadow-sm transition-all duration-200 active:scale-95"
+          title="Return to Welcome Landing"
+        >
+          <Home size={13} className="text-zinc-700" />
+          <span>Welcome Page</span>
+        </button>
         {user ? (
-          <div className="group relative">
-            <button className="flex items-center gap-2 px-3 py-2 bg-white/80 backdrop-blur rounded-full border border-black/10 shadow-sm hover:bg-white transition-all">
-              <img src={user.photoURL || ''} className="w-6 h-6 rounded-full border border-black/10" alt="avatar" />
-              <span className="text-[10px] font-bold uppercase tracking-tight max-w-[80px] truncate">{user.displayName}</span>
-            </button>
-            <div className="absolute top-full left-0 mt-2 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-opacity">
-              <button onClick={signOut} className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-xl text-[10px] uppercase font-bold hover:bg-zinc-800">
-                <LogOut size={12} /> Sign Out
-              </button>
-            </div>
-          </div>
+          <button 
+            onClick={() => setShowDashboard(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-white/80 backdrop-blur rounded-full border border-black/10 shadow-sm hover:scale-105 active:scale-95 hover:bg-white transition-all duration-200"
+            title="Open Home Dashboard"
+          >
+            <img src={user.photoURL || ''} className="w-6 h-6 rounded-full border border-black/10" alt="avatar" />
+            <span className="text-[10.5px] font-bold uppercase tracking-tight max-w-[100px] truncate">{user.displayName}</span>
+          </button>
         ) : (
-          <button onClick={signIn} className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-full text-[10px] uppercase font-bold shadow-lg hover:scale-105 transition-transform active:scale-95">
-            <UserIcon size={14} /> Connect Account
+          <button 
+            onClick={() => setShowDashboard(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-full text-[10.5px] uppercase font-bold shadow-lg hover:scale-105 transition-transform active:scale-95"
+            title="Open Home Dashboard"
+          >
+            <UserIcon size={14} /> Dashboard Home
           </button>
         )}
       </div>
@@ -513,7 +891,7 @@ export default function App() {
             <div className="flex items-center gap-1 border-r border-black/10 pr-3">
               <ToolButton active={mode === 'draw'} onClick={() => setMode('draw')} icon={<Pencil size={18} />} label="Pen" />
               <ToolButton active={mode === 'erase'} onClick={() => setMode('erase')} icon={<Eraser size={18} />} label="Eraser" />
-              <ToolButton active={penOnly} onClick={() => setPenOnly(!penOnly)} icon={<Plus size={18} className={penOnly ? 'rotate-45' : ''} />} label="Stylus Lock" />
+              <ToolButton active={penOnly} onClick={toggleStylusLock} icon={<Plus size={18} className={penOnly ? 'rotate-45' : ''} />} label="Stylus Lock" />
             </div>
 
             <div className="flex items-center gap-1.5 border-r border-black/10 pr-3">
@@ -530,6 +908,7 @@ export default function App() {
                 onClick={() => colorInputRef.current?.click()}
                 className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 ${!COLORS.includes(color) && mode === 'draw' ? 'border-black scale-110 shadow-lg' : 'border-black/5 bg-zinc-100'}`}
                 style={{ backgroundColor: !COLORS.includes(color) ? color : undefined }}
+                title="System Color Picker"
               >
                 {!COLORS.includes(color) ? null : <Pipette size={12} className="opacity-40" />}
                 <input 
@@ -542,6 +921,17 @@ export default function App() {
                     setMode('draw');
                   }}
                 />
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowColorStudio(!showColorStudio);
+                  if (showLayers) setShowLayers(false);
+                }}
+                className={`p-1.5 rounded-lg transition-all hover:scale-110 active:scale-95 ${showColorStudio ? 'bg-black text-white shadow-md' : 'hover:bg-black/5 text-zinc-650 opacity-65 hover:opacity-100'}`}
+                title="Toggle Color Studio"
+              >
+                <Palette size={15} />
               </button>
             </div>
 
@@ -649,6 +1039,649 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Color Studio Panel */}
+      <AnimatePresence>
+        {showColorStudio && !showGallery && (
+          <motion.div
+            initial={{ y: 20, x: '-50%', opacity: 0 }}
+            animate={{ y: 0, x: '-50%', opacity: 1 }}
+            exit={{ y: 20, x: '-50%', opacity: 0 }}
+            className="absolute bottom-28 left-1/2 w-[340px] bg-white/95 backdrop-blur-xl border border-black/10 rounded-[28px] shadow-2xl z-50 p-6 flex flex-col gap-4"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Palette size={14} className="text-zinc-500" />
+                <h3 className="font-black uppercase italic tracking-tighter text-xs">Color Studio</h3>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={addCurrentColorToSwatches}
+                  className="px-2.5 py-1 bg-black text-white hover:bg-zinc-800 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all"
+                  title="Add to Custom Swatches"
+                >
+                  Save Swatch
+                </button>
+                <button 
+                  onClick={() => setShowColorStudio(false)} 
+                  className="p-1.5 hover:bg-black/5 rounded-full text-zinc-400 hover:text-zinc-650 transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Brush & Color Preview Section */}
+            <div className="flex items-center gap-4 bg-zinc-50 p-3 rounded-2xl border border-black/5">
+              <div className="relative w-12 h-12 rounded-xl flex items-center justify-center overflow-hidden border border-black/10 bg-white shadow-inner">
+                <div 
+                  className="absolute inset-0 opacity-10" 
+                  style={{ backgroundImage: 'radial-gradient(#000 1px, transparent 1px)', backgroundSize: '6px 6px' }} 
+                />
+                <div 
+                  className="rounded-full shadow-md z-10 transition-all duration-200"
+                  style={{ 
+                    backgroundColor: color, 
+                    width: Math.max(8, Math.min(40, baseWidth)), 
+                    height: Math.max(8, Math.min(40, baseWidth)) 
+                  }}
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-tight text-zinc-900 truncate">Brush Color Preview</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="font-mono text-[9px] text-zinc-400">HEX:</span>
+                  <input 
+                    type="text"
+                    value={color}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val.startsWith('#') && val.length <= 7) {
+                        setColor(val);
+                        setMode('draw');
+                      }
+                    }}
+                    className="bg-transparent border-none font-mono text-xs font-bold text-zinc-700 w-16 focus:outline-none uppercase"
+                  />
+                  <button 
+                    onClick={() => colorInputRef.current?.click()}
+                    className="p-1 hover:bg-black/5 rounded text-zinc-400 hover:text-zinc-600 transition-colors"
+                    title="System Spectrum Picker"
+                  >
+                    <Pipette size={11} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Interactive RGB Sliders Widget */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[9px] uppercase tracking-widest text-zinc-400 flex items-center gap-1">
+                  <Sliders size={10} /> RGB Controllers
+                </span>
+                <span className="font-mono text-[9px] text-zinc-400 font-bold">
+                  rgb({rgb.r}, {rgb.g}, {rgb.b})
+                </span>
+              </div>
+
+              {/* Red Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[8px] font-mono leading-none">
+                  <span className="font-semibold text-red-500">Red Channel</span>
+                  <span>{rgb.r}</span>
+                </div>
+                <div className="relative flex items-center">
+                  <input 
+                    type="range"
+                    min="0"
+                    max="255"
+                    value={rgb.r}
+                    onChange={(e) => handleRgbChange('r', parseInt(e.target.value))}
+                    className="w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-red-500 bg-gradient-to-r from-zinc-100 to-red-500"
+                  />
+                </div>
+              </div>
+
+              {/* Green Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[8px] font-mono leading-none">
+                  <span className="font-semibold text-green-500">Green Channel</span>
+                  <span>{rgb.g}</span>
+                </div>
+                <div className="relative flex items-center">
+                  <input 
+                    type="range"
+                    min="0"
+                    max="255"
+                    value={rgb.g}
+                    onChange={(e) => handleRgbChange('g', parseInt(e.target.value))}
+                    className="w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-green-500 bg-gradient-to-r from-zinc-100 to-green-500"
+                  />
+                </div>
+              </div>
+
+              {/* Blue Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[8px] font-mono leading-none">
+                  <span className="font-semibold text-blue-500">Blue Channel</span>
+                  <span>{rgb.b}</span>
+                </div>
+                <div className="relative flex items-center">
+                  <input 
+                    type="range"
+                    min="0"
+                    max="255"
+                    value={rgb.b}
+                    onChange={(e) => handleRgbChange('b', parseInt(e.target.value))}
+                    className="w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-blue-500 bg-gradient-to-r from-zinc-100 to-blue-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Custom Palette Swatches */}
+            <div className="space-y-2 pt-2 border-t border-black/5">
+              <h4 className="text-[9px] font-mono uppercase tracking-widest text-zinc-400">Custom Swatches Saved</h4>
+              <div className="flex flex-wrap gap-2 max-h-20 overflow-y-auto pr-1">
+                {customSwatches.length === 0 ? (
+                  <p className="text-[9px] text-zinc-400 italic">No custom swatches saved yet. Click Save Swatch above!</p>
+                ) : (
+                  customSwatches.map((swatch, idx) => (
+                    <div key={`${swatch}-${idx}`} className="group relative">
+                      <button
+                        onClick={() => { setColor(swatch); setMode('draw'); }}
+                        className={`w-6 h-6 rounded-lg border transition-all hover:scale-110 active:scale-95 ${color === swatch && mode === 'draw' ? 'border-black scale-110 shadow-lg' : 'border-black/5'}`}
+                        style={{ backgroundColor: swatch }}
+                        title={`Select ${swatch}`}
+                      />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeSwatch(swatch); }}
+                        className="absolute -top-1.5 -right-1.5 bg-black text-white w-3.5 h-3.5 rounded-full flex items-center justify-center font-mono font-black text-[7px] leading-none opacity-0 group-hover:opacity-100 transition-opacity border border-white hover:bg-red-500"
+                        title="Delete swatch"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Home Dashboard Overlay */}
+      <AnimatePresence>
+        {showDashboard && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="absolute inset-0 bg-[#F5F5F0] z-[120] overflow-y-auto p-4 md:p-8 select-auto"
+          >
+            <div className="max-w-6xl mx-auto bg-white border border-black/10 rounded-[32px] overflow-hidden shadow-2xl min-h-[90vh] flex flex-col md:flex-row">
+              {/* Left Column: User Profile & Quick States */}
+              <div className="w-full md:w-[320px] bg-zinc-50 border-b md:border-b-0 md:border-r border-black/5 p-8 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-3 mb-8">
+                    <button 
+                      onClick={() => setShowDashboard(false)}
+                      className="w-10 h-10 bg-black text-white rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
+                    >
+                      <ChevronRight className="rotate-180" size={20} />
+                    </button>
+                    <div>
+                      <h2 className="text-xl font-black italic uppercase tracking-tighter">Studio Home</h2>
+                      <p className="text-[9px] font-mono opacity-40 uppercase tracking-widest">Workspace Profile</p>
+                    </div>
+                  </div>
+
+                  {user ? (
+                    <div className="space-y-6">
+                      <div className="bg-white border border-black/10 p-5 rounded-2xl flex flex-col items-center text-center shadow-sm">
+                        <img src={user.photoURL || ''} className="w-16 h-16 rounded-full border border-black/10 mb-3 shadow-[0_4px_12px_rgba(0,0,0,0.05)]" alt="avatar" />
+                        <h3 className="font-extrabold uppercase text-xs tracking-tight text-zinc-900">{user.displayName}</h3>
+                        <p className="text-[10px] font-mono text-zinc-400 mt-1 max-w-full truncate">{user.email}</p>
+                        <div className="mt-4 flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full font-mono text-[8px] uppercase tracking-wide font-semibold border border-green-200/50">
+                          <Circle size={6} className="fill-current animate-pulse text-green-500" /> Cloud Sync Active
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-black/10 p-5 rounded-2xl space-y-4">
+                        <h4 className="text-[9px] font-mono uppercase tracking-widest text-zinc-400">Mastery Snapshot</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-2xl font-black italic text-zinc-900 leading-none">{drawings.length}</p>
+                            <p className="text-[8px] font-mono uppercase tracking-tight text-zinc-400 mt-1">Sketches Saved</p>
+                          </div>
+                          <div>
+                            <p className="text-2xl font-black italic text-zinc-900 leading-none">
+                              {layers.reduce((sum, l) => sum + l.strokes.length, 0)}
+                            </p>
+                            <p className="text-[8px] font-mono uppercase tracking-tight text-zinc-400 mt-1 font-semibold">Active Strokes</p>
+                          </div>
+                        </div>
+                        <div className="pt-2 border-t border-black/5 flex justify-between text-[10px]">
+                          <span className="opacity-40 uppercase font-bold tracking-tight">Active Layers:</span>
+                          <span className="font-bold">{layers.length} Layers</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-zinc-100 border border-transparent p-5 rounded-2xl text-center shadow-inner space-y-4 mb-6">
+                      <div className="w-12 h-12 bg-black/5 rounded-full flex items-center justify-center mx-auto text-zinc-500">
+                        <UserIcon size={20} />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="font-black text-xs uppercase text-zinc-800">Local Guest Mode</h3>
+                        <p className="text-[10px] text-zinc-500 leading-relaxed">Log in with your Google account to enable secure database backups and Gemini assistant recommendations!</p>
+                      </div>
+                      <button 
+                        onClick={() => { signIn(); }}
+                        className="w-full py-2.5 bg-black text-white text-[10px] uppercase font-bold rounded-xl hover:bg-zinc-800 transition-colors tracking-widest shadow-md"
+                      >
+                        Connect Google Account
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-8 space-y-4">
+                  {user && (
+                    <button 
+                      onClick={() => { signOut(); setShowDashboard(false); }}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-red-50 hover:bg-red-100 border border-red-100 text-red-600 rounded-xl font-bold uppercase text-[10px] tracking-wider transition-colors"
+                    >
+                      <LogOut size={14} /> Sign Out Account
+                    </button>
+                  )}
+                  <div className="text-center opacity-30">
+                    <p className="text-[8px] font-mono uppercase tracking-widest">S Pen Draw Pro • v2.1.0</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: S Pen Calibration Lab & Creator Quick Start */}
+              <div className="flex-1 p-8 md:p-12 flex flex-col justify-between space-y-8">
+                <div>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-black/5">
+                    <div>
+                      <h1 className="text-3xl font-extrabold tracking-tighter uppercase italic">Creative Dashboard</h1>
+                      <p className="text-xs text-zinc-500 font-medium">Calibrate your stylus pressure settings and manage active sketch presets.</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          setShowDashboard(false);
+                          setShowGallery(true);
+                        }}
+                        className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 rounded-full font-bold uppercase text-[9px] tracking-wider transition-all flex items-center gap-2"
+                      >
+                        <Grid2X2 size={12} /> Studio Gallery
+                      </button>
+                      <button 
+                        onClick={() => setShowDashboard(false)}
+                        className="px-5 py-2 bg-black text-white hover:bg-zinc-800 rounded-full font-bold uppercase text-[9px] tracking-wider transition-all flex items-center gap-2 shadow-lg"
+                      >
+                        <Pencil size={12} /> Canvas Workspace
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
+                    {/* S Pen Calibration Lab */}
+                    <div className="bg-[#F9F9F7] border border-black/5 p-6 rounded-2xl flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                          <h3 className="font-mono text-[9px] uppercase tracking-widest text-zinc-400">Stylus V-Sensing Diagnostic</h3>
+                        </div>
+                        <h4 className="font-extrabold uppercase text-xs tracking-tight mb-2 text-zinc-800">Pressure Calibration Pad</h4>
+                        <p className="text-[10px] text-zinc-500 leading-relaxed mb-4">Touch or hover with your stylus inside the pad below to diagnostic active pressure vectors. Adjust offset and scale values to fine-tune your stylus response.</p>
+                      </div>
+
+                      <div 
+                        onPointerMove={handleTestPointerMove}
+                        onPointerDown={handleTestPointerMove}
+                        onPointerUp={handleTestPointerUp}
+                        onPointerLeave={handleTestPointerUp}
+                        className="relative h-44 bg-white border border-black/10 rounded-xl flex flex-col items-center justify-center cursor-crosshair overflow-hidden touch-none mb-4"
+                        style={{ touchAction: 'none' }}
+                      >
+                        <div className="absolute top-2 left-2 text-[8px] font-mono bg-zinc-100 px-1.5 py-0.5 rounded opacity-50 uppercase">Diagnostic Stage</div>
+                        
+                        <p className="text-[8px] font-mono opacity-25 uppercase tracking-wide pointer-events-none mb-1">Press & Move Pen Here</p>
+                        
+                        {/* Live Pressure Circle visualization */}
+                        <motion.div 
+                          animate={{ 
+                            scale: isTestingPressure 
+                              ? 0.3 + (useRawCustomFormula ? (pressureOffset + pressureScale * testPressure) : (pressureOffset + pressureScale * testPressure) * 4) / 10
+                              : 1,
+                            opacity: isTestingPressure ? 0.3 + testPressure * 0.7 : 0.15
+                          }}
+                          className="w-16 h-16 rounded-full bg-zinc-950 flex items-center justify-center text-white pointer-events-none absolute"
+                          style={{
+                            boxShadow: isTestingPressure ? '0 10px 30px rgba(0,0,0,0.1)' : 'none'
+                          }}
+                        />
+
+                        {/* Text Overlay live pressure indicators */}
+                        <div className="absolute bottom-3 text-center pointer-events-none">
+                          <p className="text-xs font-mono font-bold leading-none">{(testPressure * 100).toFixed(0)}%</p>
+                          <p className="text-[8px] font-mono opacity-30 uppercase tracking-widest mt-1">
+                            {isTestingPressure ? 'REGISTERING PRESSURE' : 'IDLE LEVEL'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Pressure Calibration Settings Row */}
+                      <div className="space-y-4 border-t border-black/5 pt-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-tight text-zinc-700 block">Pressure sensitivity mapping</span>
+                            <span className="text-[8px] font-mono text-zinc-400 uppercase tracking-widest leading-none">Formula Mode</span>
+                          </div>
+                          <div className="flex gap-1.5">
+                            <button
+                              onClick={() => {
+                                setUseRawCustomFormula(true);
+                                try { localStorage.setItem('s_pen_use_raw_formula', 'true'); } catch {}
+                              }}
+                              className={`px-2 py-1 font-mono text-[8px] rounded uppercase font-bold transition-all ${useRawCustomFormula ? 'bg-black text-white' : 'bg-transparent border border-black/10 text-zinc-500 hover:border-black/30'}`}
+                              title="Formula: Offset + Scale * Pressure"
+                            >
+                              Strict Range
+                            </button>
+                            <button
+                              onClick={() => {
+                                setUseRawCustomFormula(false);
+                                try { localStorage.setItem('s_pen_use_raw_formula', 'false'); } catch {}
+                              }}
+                              className={`px-2 py-1 font-mono text-[8px] rounded uppercase font-bold transition-all ${!useRawCustomFormula ? 'bg-black text-white' : 'bg-transparent border border-black/10 text-zinc-500 hover:border-black/30'}`}
+                              title="Formula: BrushWidth * (Offset + Scale * Pressure)"
+                            >
+                              Brush Relative
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Active Formula Indicator Badge */}
+                        <div className="bg-zinc-100 border border-black/5 rounded-xl p-2.5 font-mono text-[8.5px] text-zinc-650 flex flex-col gap-1 shadow-inner">
+                          <div className="flex justify-between items-center">
+                            <span className="opacity-55 uppercase text-[7.5px] font-extrabold">Active Paint Formula:</span>
+                            <span className="font-bold text-orange-600 uppercase tracking-tight">Active</span>
+                          </div>
+                          <span className="font-bold text-black bg-white px-2 py-1 rounded border border-black/5 shadow-sm text-center">
+                            {useRawCustomFormula 
+                              ? `Paint.strokeWidth = ${pressureOffset.toFixed(1)} + ${pressureScale.toFixed(1)} * pressure`
+                              : `Paint.strokeWidth = ${baseWidth}px * (${pressureOffset.toFixed(1)} + ${pressureScale.toFixed(1)} * pressure)`
+                            }
+                          </span>
+                        </div>
+
+                        {/* Offset slider */}
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[9px] font-mono leading-none">
+                            <span className="font-semibold text-zinc-500">Base Offset (pressureOffset)</span>
+                            <span className="font-black text-black">{pressureOffset.toFixed(1)}</span>
+                          </div>
+                          <input 
+                            type="range"
+                            min="0.1"
+                            max="8.0"
+                            step="0.1"
+                            value={pressureOffset}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              setPressureOffset(val);
+                              try { localStorage.setItem('s_pen_pressure_offset', String(val)); } catch {}
+                            }}
+                            className="w-full h-1 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-black"
+                          />
+                        </div>
+
+                        {/* Scale slider */}
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[9px] font-mono leading-none">
+                            <span className="font-semibold text-zinc-500">Dynamic Scale (pressureScale)</span>
+                            <span className="font-black text-black">+{pressureScale.toFixed(1)}</span>
+                          </div>
+                          <input 
+                            type="range"
+                            min="0.0"
+                            max="20.0"
+                            step="0.1"
+                            value={pressureScale}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              setPressureScale(val);
+                              try { localStorage.setItem('s_pen_pressure_scale', String(val)); } catch {}
+                            }}
+                            className="w-full h-1 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-black"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Input Device Selection & Filter Settings */}
+                      <div className="mt-4 pt-4 border-t border-black/5 space-y-4">
+                        <div>
+                          <span className="text-[10px] font-extrabold uppercase tracking-tight text-zinc-800 block mb-1">Workspace Input Focus Mode</span>
+                          <span className="text-[8px] font-mono text-zinc-400 uppercase tracking-widest block mb-3">Manual Override Toggle</span>
+                          
+                          {/* Segmented active slider switch */}
+                          <div className="bg-zinc-100 p-1.5 rounded-2xl flex gap-1.5 border border-black/5 shadow-inner">
+                            <button
+                              onClick={() => setFocusModeExplicit('touch')}
+                              className={`flex-1 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 transition-all ${
+                                focusMode === 'touch'
+                                  ? 'bg-white text-black border border-black/10 shadow-sm font-black'
+                                  : 'text-zinc-500 hover:text-black hover:bg-black/5 font-semibold'
+                              }`}
+                              title="Focus on fingers and mouse gestures"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <Hand size={14} className={focusMode === 'touch' ? 'text-black' : 'text-zinc-400'} />
+                                <span className="text-[10.5px] uppercase tracking-wide">Touch Focus</span>
+                              </div>
+                              <span className="text-[7.5px] font-mono opacity-50 uppercase">Finger & Passive Pens</span>
+                            </button>
+
+                            <button
+                              onClick={() => setFocusModeExplicit('pen')}
+                              className={`flex-1 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 transition-all ${
+                                focusMode === 'pen'
+                                  ? 'bg-black text-white border border-transparent shadow-md font-black'
+                                  : 'text-zinc-500 hover:text-black hover:bg-black/5 font-semibold'
+                              }`}
+                              title="Focus exclusively on active stylus/S Pen and palm rejection"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <Pencil size={14} className={focusMode === 'pen' ? 'text-white font-black' : 'text-zinc-400'} />
+                                <span className="text-[10.5px] uppercase tracking-wide">Pen Focus</span>
+                              </div>
+                              <span className="text-[7.5px] font-mono opacity-60 uppercase">Active Stylus Block</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Diagnostics & Manual Settings Overrides wrapper */}
+                        <div className="space-y-2 bg-zinc-50 border border-black/5 p-3 rounded-xl">
+                          <span className="text-[8.5px] font-mono font-bold uppercase tracking-widest text-zinc-400">Current Filters Status:</span>
+                          <div className="grid grid-cols-3 gap-1.5 text-[8.5px] font-mono text-zinc-650">
+                            <div className="bg-white border border-black/5 p-2 rounded-lg flex flex-col items-center">
+                              <span className="opacity-50">STYLUS</span>
+                              <span className="font-extrabold text-black mt-1">ENABLED</span>
+                            </div>
+                            <div className="bg-white border border-black/5 p-2 rounded-lg flex flex-col items-center">
+                              <span className="opacity-50">TOUCH</span>
+                              <span className={`font-extrabold mt-1 ${focusMode === 'touch' ? 'text-green-600' : 'text-red-500'}`}>
+                                {focusMode === 'touch' ? 'ACTIVE' : 'MUTED'}
+                              </span>
+                            </div>
+                            <div className="bg-white border border-black/5 p-2 rounded-lg flex flex-col items-center">
+                              <span className="opacity-50">MOUSE</span>
+                              <span className={`font-extrabold mt-1 ${focusMode === 'touch' ? 'text-green-600' : 'text-red-500'}`}>
+                                {focusMode === 'touch' ? 'ACTIVE' : 'MUTED'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Pressure Simulation Section (for Touch, Mouse, or non-sensitive pens) */}
+                        <div className="space-y-3 bg-zinc-50 border border-black/5 p-3.5 rounded-2xl">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-[9px] font-bold uppercase tracking-tight text-zinc-700 block">Pressure Emulation</span>
+                              <span className="text-[8px] font-mono text-zinc-400 uppercase tracking-widest leading-none">For Finger/Generic Pens</span>
+                            </div>
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => {
+                                  setSimulationMode('velocity');
+                                  try { localStorage.setItem('s_pen_simulation_mode', 'velocity'); } catch {}
+                                }}
+                                className={`px-2 py-1 font-mono text-[8px] rounded uppercase font-bold transition-all ${simulationMode === 'velocity' ? 'bg-black text-white' : 'bg-white border border-black/10 text-zinc-500 hover:border-black/30'}`}
+                                title="Dynamic thickness based on stroke speed"
+                              >
+                                Velocity
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setSimulationMode('constant');
+                                  try { localStorage.setItem('s_pen_simulation_mode', 'constant'); } catch {}
+                                }}
+                                className={`px-2 py-1 font-mono text-[8px] rounded uppercase font-bold transition-all ${simulationMode === 'constant' ? 'bg-black text-white' : 'bg-white border border-black/10 text-zinc-500 hover:border-black/30'}`}
+                                title="Default stable simulated pressure"
+                              >
+                                Constant
+                              </button>
+                            </div>
+                          </div>
+
+                          {simulationMode === 'velocity' ? (
+                            <p className="text-[8px] text-zinc-400 font-mono italic leading-normal">
+                              ⚡ Velocity Emulation: Drawing faster creates lighter/thinner lines; drawing slower makes them fuller, simulating an S Pen natively with finger touch or mouse.
+                            </p>
+                          ) : (
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[9px] font-mono leading-none">
+                                <span className="font-semibold text-zinc-500">Constant Emulated Pressure</span>
+                                <span className="font-black text-black">{(constantPressureMultiplier * 100).toFixed(0)}%</span>
+                              </div>
+                              <input 
+                                type="range"
+                                min="0.1"
+                                max="1.0"
+                                step="0.05"
+                                value={constantPressureMultiplier}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value);
+                                  setConstantPressureMultiplier(val);
+                                  try { localStorage.setItem('s_pen_constant_pressure_multiplier', String(val)); } catch {}
+                                }}
+                                className="w-full h-1 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-black"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="pt-2 border-t border-black/5 flex items-center justify-between">
+                          <span className="text-[9px] font-mono opacity-40 uppercase tracking-widest">Pen Only Stylus Lock:</span>
+                          <button 
+                            onClick={toggleStylusLock}
+                            className={`px-3 py-1 font-mono text-[9px] rounded-lg uppercase font-bold transition-all ${penOnly ? 'bg-black text-white border border-transparent' : 'bg-transparent border border-black/10 text-zinc-500 hover:border-black/30'}`}
+                            title="Quick-toggle Pen Only Stylus mode (Disables Finger Touch to prevent palm-touch interference)"
+                          >
+                            {penOnly ? 'Enabled' : 'Disabled'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Presets and Customizations */}
+                    <div className="space-y-6">
+                      <div className="bg-zinc-50 border border-black/5 p-6 rounded-2xl">
+                        <h4 className="text-[9px] font-mono uppercase tracking-widest text-zinc-400 mb-4">Background Grid Pattern</h4>
+                        <div className="grid grid-cols-2 gap-2">
+                          {(['none', 'dots', 'grid', 'lines'] as const).map(pType => (
+                            <button
+                              key={pType}
+                              onClick={() => setBackgroundType(pType)}
+                              className={`py-2 px-3 border rounded-xl text-[10px] font-bold uppercase transition-all tracking-tight ${backgroundType === pType ? 'bg-black text-white border-black' : 'bg-white border-black/5 text-zinc-600 hover:border-black/20'}`}
+                            >
+                              {pType === 'none' ? 'Plain BG' : `${pType} Style`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="bg-zinc-50 border border-black/5 p-6 rounded-2xl space-y-3">
+                        <h4 className="text-[9px] font-mono uppercase tracking-widest text-zinc-400">Brush Preset Shortcuts</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {[2, 4, 8, 16, 24, 32, 64].map(w => (
+                            <button
+                              key={w}
+                              onClick={() => setBaseWidth(w)}
+                              className={`px-3 py-1.5 border rounded-lg font-mono text-xs transition-all ${baseWidth === w ? 'bg-black text-white border-black shadow' : 'bg-white border-black/5 text-zinc-600 hover:border-zinc-300'}`}
+                            >
+                              {w}px
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[9px] text-zinc-400 leading-normal pt-2">Selecting brush presets sets the default width for stroke paths. Pen tip sizes scale proportionally with active pressure factors.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recent Drawings carousel / row */}
+                  <div className="mt-8">
+                    <h3 className="text-xs uppercase tracking-widest font-mono opacity-40 mb-4">Recent Masterpieces</h3>
+                    {drawings.length === 0 ? (
+                      <div onClick={() => setShowDashboard(false)} className="h-32 border border-dashed border-black/10 hover:bg-[#eaeae5] bg-white/50 cursor-pointer rounded-2xl flex flex-col items-center justify-center opacity-40 transition-colors">
+                        <Plus size={24} className="mb-2" />
+                        <p className="text-[10px] font-bold uppercase tracking-wider">Start sketching to see your recent drafts here</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {drawings.slice(0, 4).map(d => (
+                          <div 
+                            key={d.id}
+                            onClick={() => {
+                              loadFromGallery(d);
+                              setShowDashboard(false);
+                            }}
+                            className="bg-[#F9F9F7] border border-black/5 hover:border-black/20 cursor-pointer p-3 rounded-2xl transition-all hover:-translate-y-1 hover:shadow-lg group"
+                          >
+                            <div className="aspect-[4/3] relative bg-white border border-black/5 rounded-xl overflow-hidden mb-2">
+                              <img src={d.dataUrl} className="w-full h-full object-contain p-1.5 grayscale-[20%] group-hover:scale-105 transition-transform duration-300" alt={d.title} />
+                            </div>
+                            <h4 className="text-[9px] font-bold uppercase tracking-wide text-zinc-800 truncate">{d.title}</h4>
+                            <p className="text-[8px] font-mono opacity-40 mt-0.5">
+                              {d.createdAt?.toDate().toLocaleDateString() || 'Just now'}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Welcome Footer / Tips section */}
+                <div className="pt-6 border-t border-black/5 flex flex-col md:flex-row md:items-center justify-between text-[10px] text-zinc-400 font-medium">
+                  <div className="flex items-center gap-2 mb-2 md:mb-0">
+                    <Sparkles size={14} className="text-orange-500" />
+                    <span>Tip: Double click the eraser tool to completely purge the canvas space.</span>
+                  </div>
+                  <span>Made for high precision pressure Stylus & S Pen.</span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Gallery Overlay */}
       <AnimatePresence>
         {showGallery && (
@@ -743,6 +1776,46 @@ export default function App() {
                 </div>
               )}
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Landing welcome page */}
+      <AnimatePresence>
+        {showLanding && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[150]"
+          >
+            <LandingPage
+              user={user}
+              onEnterCanvas={() => setShowLanding(false)}
+              onOpenDashboard={() => {
+                setShowLanding(false);
+                setShowDashboard(true);
+              }}
+              onOpenGallery={() => {
+                setShowLanding(false);
+                setShowGallery(true);
+              }}
+              onSignIn={signIn}
+              savedDrawingsCount={drawings.length}
+              allowTouch={allowTouch}
+              setAllowTouch={(val) => {
+                setAllowTouch(val);
+                setPenOnly(allowPen && !val && !allowMouse);
+              }}
+              simulationMode={simulationMode}
+              setSimulationMode={setSimulationMode}
+              pressureOffset={pressureOffset}
+              setPressureOffset={setPressureOffset}
+              pressureScale={pressureScale}
+              setPressureScale={setPressureScale}
+              focusMode={focusMode}
+              setFocusModeExplicit={setFocusModeExplicit}
+            />
           </motion.div>
         )}
       </AnimatePresence>
