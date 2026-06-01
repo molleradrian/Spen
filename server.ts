@@ -21,6 +21,33 @@ const ai = new GoogleGenAI({
   }
 });
 
+// Helper to run generating content with exponential backoff on 503 or high demand transient errors
+async function generateContentWithRetry(aiClient: GoogleGenAI, params: any, retries = 3, initialDelay = 1500) {
+  let delay = initialDelay;
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      return await aiClient.models.generateContent(params);
+    } catch (error: any) {
+      const errMsg = error?.message || "";
+      const isTransient = 
+        error?.status === 503 ||
+        error?.statusCode === 503 ||
+        errMsg.includes("503") ||
+        errMsg.includes("UNAVAILABLE") ||
+        errMsg.includes("high demand") ||
+        errMsg.includes("temporary");
+
+      if (isTransient && attempt <= retries) {
+        console.warn(`[Gemini API] Target call failed with transient error (attempt ${attempt}/${retries + 1}). Retrying in ${delay}ms... Details:`, errMsg);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff increment
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
 // API Routes
 app.post("/api/gemini/inspire", async (req, res) => {
   try {
@@ -34,8 +61,8 @@ app.post("/api/gemini/inspire", async (req, res) => {
     // Remove data:image/png;base64, prefix
     const base64Data = imageData.split(',')[1];
     
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+    const response = await generateContentWithRetry(ai, {
+      model: "gemini-3.5-flash",
       contents: {
         parts: [
           {
@@ -51,10 +78,12 @@ app.post("/api/gemini/inspire", async (req, res) => {
       }
     });
 
-    res.json({ text: response.text });
+    res.json({ text: response?.text || "No response received" });
   } catch (error: any) {
     console.error("Gemini Error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: error?.message || "Internal server error during Gemini analysis. Please try again." 
+    });
   }
 });
 

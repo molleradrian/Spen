@@ -30,7 +30,9 @@ import {
   Clock,
   Palette,
   Sliders,
-  Hand
+  Hand,
+  Copy,
+  Check
 } from 'lucide-react';
 import { 
   collection, 
@@ -257,6 +259,37 @@ export default function App() {
       return 0.5;
     }
   });
+
+  // Flutter draw code simulation state
+  const [flutterMultiplier, setFlutterMultiplier] = useState(3.0);
+  const [isCopied, setIsCopied] = useState(false);
+
+  const copyFlutterCode = useCallback(() => {
+    const code = `void onPanUpdate(GestureDragUpdateDetails details) {
+  // Access hardware input pressure from touch/pencil
+  double pressure = details.pressure ?? 1.0;
+  
+  // Dynamically scale strokeWidth of Paint object based on pressure
+  double strokeWidth = ${flutterMultiplier.toFixed(1)} * pressure;
+  
+  setState(() {
+    points.add(DrawingPoint(
+      point: details.localPosition,
+      paint: Paint()
+        ..color = activeColor
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = strokeWidth,
+    ));
+  });
+}`;
+    try {
+      navigator.clipboard.writeText(code);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      console.error("Clipboard copy failed:", err);
+    }
+  }, [flutterMultiplier]);
 
   // Explicit focus mode toggler with physical S-Pen palm rejection sync
   const setFocusModeExplicit = useCallback((newMode: 'touch' | 'pen') => {
@@ -711,10 +744,13 @@ export default function App() {
         })
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "The API is currently busy. Please try again.");
+      }
       setAiInspiration(data.text);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setAiInspiration("Failed to get AI ideas. Try again.");
+      setAiInspiration(`Failed to load AI ideas. Detail: ${err?.message || "Please try again shortly."}`);
     } finally {
       setIsAiProcessing(false);
     }
@@ -1631,6 +1667,76 @@ export default function App() {
                           ))}
                         </div>
                         <p className="text-[9px] text-zinc-400 leading-normal pt-2">Selecting brush presets sets the default width for stroke paths. Pen tip sizes scale proportionally with active pressure factors.</p>
+                      </div>
+
+                      {/* Flutter SDK Pressure Sensitivity Integration Panel */}
+                      <div className="bg-[#121314] text-white p-6 rounded-2xl space-y-4 shadow-xl border border-white/5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#02569B]" /> 
+                          <h4 className="text-[9px] font-mono uppercase tracking-widest text-zinc-400">Flutter Canvas Integration</h4>
+                        </div>
+                        <div>
+                          <h5 className="font-extrabold uppercase text-[11px] tracking-tight text-white">Pressure sensitivity mapping</h5>
+                          <p className="text-[9.5px] text-zinc-400 mt-1 leading-normal">
+                            Access stylus pressure indicators inside the <code className="text-zinc-300 font-mono font-bold bg-white/5 px-1 py-0.5 rounded">onPanUpdate</code> event to dynamically scale brush width parameters.
+                          </p>
+                        </div>
+
+                        {/* Interactive Scale factor slider */}
+                        <div className="space-y-1 bg-white/5 p-3 rounded-xl border border-white/5">
+                          <div className="flex justify-between text-[9px] font-mono leading-none text-zinc-300">
+                            <span className="font-semibold text-zinc-400">Stroke width multiplier</span>
+                            <span className="font-black text-white">{flutterMultiplier.toFixed(1)}x</span>
+                          </div>
+                          <input 
+                            type="range"
+                            min="1.0"
+                            max="10.0"
+                            step="0.5"
+                            value={flutterMultiplier}
+                            onChange={(e) => setFlutterMultiplier(parseFloat(e.target.value))}
+                            className="w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-white mt-1.5"
+                          />
+                        </div>
+
+                        {/* Flutter Copyable Code Box */}
+                        <div className="relative bg-black/40 border border-white/5 rounded-xl p-3.5 font-mono text-[8.5px] text-zinc-300 shadow-inner overflow-hidden">
+                          <button
+                            onClick={copyFlutterCode}
+                            className="absolute top-2.5 right-2.5 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-300 transition-all active:scale-95 flex items-center gap-1.5 font-sans text-[8px] uppercase tracking-wider font-bold"
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check size={10} className="text-green-400 font-extrabold" />
+                                <span>Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={10} />
+                                <span>Copy Code</span>
+                              </>
+                            )}
+                          </button>
+                          <pre className="text-left select-text pr-12 leading-relaxed overflow-x-auto whitespace-pre">
+{`void onPanUpdate(GestureDragUpdateDetails details) {
+  // Access input pressure level (stylus/mouse)
+  double pressure = details.pressure ?? 1.0;
+  
+  // Heavier press dynamically adjusts the strokeWidth of the brush
+  double strokeWidth = ${flutterMultiplier.toFixed(1)} * pressure;
+  
+  setState(() {
+    points.add(DrawingPoint(
+      point: details.localPosition,
+      paint: Paint()
+        ..color = activeColor
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = strokeWidth,
+    ));
+  });
+}`}
+                          </pre>
+                        </div>
                       </div>
                     </div>
                   </div>
