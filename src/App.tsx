@@ -32,7 +32,10 @@ import {
   Sliders,
   Hand,
   Copy,
-  Check
+  Check,
+  Loader2,
+  Cloud,
+  Briefcase
 } from 'lucide-react';
 import { 
   collection, 
@@ -47,8 +50,10 @@ import {
   Timestamp
 } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { db, auth, signIn, signOut } from './firebase';
+import { db, auth, signIn, signOut, getAccessToken, setAccessToken } from './firebase';
 import LandingPage from './components/LandingPage';
+import GoogleDriveHub from './components/GoogleDriveHub';
+import WorkspaceHub from './components/WorkspaceHub';
 
 // --- Types ---
 
@@ -177,6 +182,15 @@ export default function App() {
   const [isTestingPressure, setIsTestingPressure] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+
+  // Google Drive & Picker state
+  const [showDriveHub, setShowDriveHub] = useState(false);
+  const [showWorkspaceHub, setShowWorkspaceHub] = useState(false);
+  const [driveToken, setDriveToken] = useState<string | null>(null);
+  const [loadedDriveFileId, setLoadedDriveFileId] = useState<string | null>(null);
+  const [loadedDriveFileName, setLoadedDriveFileName] = useState<string | null>(null);
+  const [canvasBackgroundImage, setCanvasBackgroundImage] = useState<string | null>(null);
   
   // Canvas State
   const [isDrawing, setIsDrawing] = useState(false);
@@ -189,6 +203,7 @@ export default function App() {
   
   // Tool State
   const [color, setColor] = useState(COLORS[0]);
+  const [colorChangerExpanded, setColorChangerExpanded] = useState(false);
   const [baseWidth, setBaseWidth] = useState(8);
   const [mode, setMode] = useState<'draw' | 'erase'>('draw');
   const [showToolbar, setShowToolbar] = useState(true);
@@ -395,9 +410,15 @@ export default function App() {
   // --- Auth & Subscription ---
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
+      if (u) {
+        const token = await getAccessToken();
+        if (token) setDriveToken(token);
+      } else {
+        setDriveToken(null);
+      }
     });
     return unsubscribe;
   }, []);
@@ -560,6 +581,7 @@ export default function App() {
     if (showGallery || showDashboard) return;
     if (!isAllowedInput(e.pointerType)) return;
     e.preventDefault();
+    setColorChangerExpanded(false);
     setIsDrawing(true);
     setRedoStack([]);
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -692,9 +714,14 @@ export default function App() {
     if (!hasStrokes) return;
     
     setIsSaving(true);
+    setSaveStatus('saving');
     try {
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      if (!canvas) {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 4000);
+        return;
+      }
 
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = canvas.width;
@@ -718,14 +745,18 @@ export default function App() {
           updatedAt: serverTimestamp()
         });
       } catch (firestoreErr) {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 4000);
         handleFirestoreError(firestoreErr, OperationType.CREATE, 'drawings');
         return;
       }
 
-      alert('Saved to gallery!');
+      setSaveStatus('success');
+      setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (err) {
       console.error(err);
-      alert('Failed to save.');
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus('idle'), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -755,6 +786,47 @@ export default function App() {
       setIsAiProcessing(false);
     }
   };
+
+  // --- Google Drive Commands ---
+  const handleConnectDrive = async () => {
+    try {
+      const u = await signIn();
+      const token = await getAccessToken();
+      setDriveToken(token);
+      setUser(u);
+      return token;
+    } catch (err: any) {
+      console.error("Failed to connect Google Drive:", err);
+      alert(`Sync Error: ${err.message || err}`);
+      return null;
+    }
+  };
+
+  const handleDisconnectDrive = useCallback(async () => {
+    try {
+      await signOut();
+      setDriveToken(null);
+      setLoadedDriveFileId(null);
+      setLoadedDriveFileName(null);
+      setCanvasBackgroundImage(null);
+    } catch (err) {
+      console.error("Failed disconnect:", err);
+    }
+  }, []);
+
+  const handleLoadWorkspace = useCallback((loadedLayers: any[], fileName: string, fileId: string) => {
+    setLayers(loadedLayers);
+    if (loadedLayers.length > 0) {
+      setActiveLayerId(loadedLayers[loadedLayers.length - 1].id);
+    }
+    setLoadedDriveFileId(fileId);
+    setLoadedDriveFileName(fileName);
+    setRedoStack([]);
+  }, []);
+
+  const handleImportBackgroundImage = useCallback((imageUrl: string) => {
+    setCanvasBackgroundImage(imageUrl);
+  }, []);
 
   const loadFromGallery = (drawing: Drawing) => {
     if (drawing.strokes) {
@@ -824,7 +896,59 @@ export default function App() {
     }
   };
 
+  const getCanvasDataUrl = useCallback((): string => {
+    const canvas = canvasRef.current;
+    if (!canvas) return '';
+    try {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tCtx = tempCanvas.getContext('2d');
+      if (tCtx) {
+        tCtx.fillStyle = '#FFFFFF';
+        tCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        tCtx.drawImage(canvas, 0, 0);
+      }
+      return tempCanvas.toDataURL('image/png', 0.8);
+    } catch (e) {
+      console.error(e);
+      return '';
+    }
+  }, []);
+
   if (loading) return null;
+
+  if (!user) {
+    return (
+      <LandingPage
+        user={user}
+        onEnterCanvas={() => setShowLanding(false)}
+        onOpenDashboard={() => {
+          setShowLanding(false);
+          setShowDashboard(true);
+        }}
+        onOpenGallery={() => {
+          setShowLanding(false);
+          setShowGallery(true);
+        }}
+        onSignIn={signIn}
+        savedDrawingsCount={drawings.length}
+        allowTouch={allowTouch}
+        setAllowTouch={(val) => {
+          setAllowTouch(val);
+          setPenOnly(allowPen && !val && !allowMouse);
+        }}
+        simulationMode={simulationMode}
+        setSimulationMode={setSimulationMode}
+        pressureOffset={pressureOffset}
+        setPressureOffset={setPressureOffset}
+        pressureScale={pressureScale}
+        setPressureScale={setPressureScale}
+        focusMode={focusMode}
+        setFocusModeExplicit={setFocusModeExplicit}
+      />
+    );
+  }
 
   return (
     <div 
@@ -844,6 +968,24 @@ export default function App() {
           backgroundSize: '24px 24px' 
         }}
       />
+
+      {/* Google Drive Imported Tracing Image */}
+      {canvasBackgroundImage && (
+        <div className="absolute inset-x-8 inset-y-16 flex items-center justify-center pointer-events-none opacity-45 select-none z-10">
+          <img 
+            src={canvasBackgroundImage} 
+            className="max-w-full max-h-full object-contain filter grayscale select-none" 
+            alt="Imported Tracing Reference" 
+          />
+          <button 
+            onClick={() => setCanvasBackgroundImage(null)}
+            className="absolute top-4 right-4 p-2 bg-black text-white hover:bg-neutral-800 rounded-xl text-[9px] uppercase tracking-wider font-extrabold pointer-events-auto shadow-xl flex items-center gap-1.5"
+            title="Clear Trace Reference"
+          >
+            <X size={11} /> Clear Reference
+          </button>
+        </div>
+      )}
 
       <canvas
         ref={canvasRef}
@@ -931,44 +1073,83 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-1.5 border-r border-black/10 pr-3">
-              {COLORS.map(c => (
-                <button
-                  key={c}
-                  onClick={() => { setColor(c); setMode('draw'); }}
-                  className={`w-6 h-6 rounded-full border-2 transition-all hover:scale-110 active:scale-95 ${color === c && mode === 'draw' ? 'border-black scale-110 shadow-lg' : 'border-black/5'}`}
-                  style={{ backgroundColor: c }}
-                />
-              ))}
-              <div className="w-px h-4 bg-black/5 mx-0.5" />
-              <button
-                onClick={() => colorInputRef.current?.click()}
-                className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 ${!COLORS.includes(color) && mode === 'draw' ? 'border-black scale-110 shadow-lg' : 'border-black/5 bg-zinc-100'}`}
-                style={{ backgroundColor: !COLORS.includes(color) ? color : undefined }}
-                title="System Color Picker"
-              >
-                {!COLORS.includes(color) ? null : <Pipette size={12} className="opacity-40" />}
-                <input 
-                  ref={colorInputRef}
-                  type="color" 
-                  className="sr-only" 
-                  value={color}
-                  onChange={(e) => {
-                    setColor(e.target.value);
-                    setMode('draw');
-                  }}
-                />
-              </button>
+              <AnimatePresence mode="wait">
+                {!colorChangerExpanded ? (
+                  <motion.button
+                    key="folded"
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.8, opacity: 0 }}
+                    onClick={() => setColorChangerExpanded(true)}
+                    className="w-7 h-7 rounded-full border border-black/15 flex items-center justify-center shadow-md cursor-pointer hover:scale-110 active:scale-95 transition-all"
+                    style={{ backgroundColor: color }}
+                    title="Expand Color Palette"
+                  >
+                    <Palette size={13} className={(hexToRgb(color).r * 299 + hexToRgb(color).g * 587 + hexToRgb(color).b * 114) / 1000 > 180 ? 'text-black/70' : 'text-white/90'} />
+                  </motion.button>
+                ) : (
+                  <motion.div
+                    key="expanded"
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: 'auto', opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    className="flex items-center gap-1.5"
+                  >
+                    {COLORS.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => { 
+                          setColor(c); 
+                          setMode('draw'); 
+                          setColorChangerExpanded(false); 
+                        }}
+                        className={`w-6 h-6 rounded-full border-2 transition-all hover:scale-110 active:scale-95 shrink-0 ${color === c && mode === 'draw' ? 'border-black scale-110 shadow-lg' : 'border-black/5'}`}
+                        style={{ backgroundColor: c }}
+                        title={`Select ${c}`}
+                      />
+                    ))}
+                    <div className="w-px h-4 bg-black/5 mx-0.5 shrink-0" />
+                    <button
+                      onClick={() => colorInputRef.current?.click()}
+                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 shrink-0 ${!COLORS.includes(color) && mode === 'draw' ? 'border-black scale-110 shadow-lg' : 'border-black/5 bg-zinc-100'}`}
+                      style={{ backgroundColor: !COLORS.includes(color) ? color : undefined }}
+                      title="System Color Picker"
+                    >
+                      {!COLORS.includes(color) ? null : <Pipette size={12} className="opacity-40" />}
+                      <input 
+                        ref={colorInputRef}
+                        type="color" 
+                        className="sr-only" 
+                        value={color}
+                        onChange={(e) => {
+                          setColor(e.target.value);
+                          setMode('draw');
+                          setColorChangerExpanded(false);
+                        }}
+                      />
+                    </button>
 
-              <button
-                onClick={() => {
-                  setShowColorStudio(!showColorStudio);
-                  if (showLayers) setShowLayers(false);
-                }}
-                className={`p-1.5 rounded-lg transition-all hover:scale-110 active:scale-95 ${showColorStudio ? 'bg-black text-white shadow-md' : 'hover:bg-black/5 text-zinc-650 opacity-65 hover:opacity-100'}`}
-                title="Toggle Color Studio"
-              >
-                <Palette size={15} />
-              </button>
+                    <button
+                      onClick={() => {
+                        setShowColorStudio(!showColorStudio);
+                        if (showLayers) setShowLayers(false);
+                      }}
+                      className={`p-1.5 rounded-lg transition-all hover:scale-110 active:scale-95 shrink-0 ${showColorStudio ? 'bg-black text-white shadow-md' : 'hover:bg-black/5 text-zinc-650 opacity-65 hover:opacity-100'}`}
+                      title="Toggle Color Studio"
+                    >
+                      <Palette size={15} />
+                    </button>
+
+                    <button
+                      onClick={() => setColorChangerExpanded(false)}
+                      className="p-1 hover:bg-black/5 rounded text-zinc-400 hover:text-zinc-650 transition-colors ml-1 shrink-0 bg-transparent border-none cursor-pointer"
+                      title="Fold Color Palette"
+                    >
+                      <ChevronRight size={14} className="rotate-180" />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             <div className="flex items-center gap-3 border-r border-black/10 pr-3">
@@ -997,7 +1178,30 @@ export default function App() {
               <ActionButton onClick={undo} disabled={layers.find(l => l.id === activeLayerId)?.strokes.length === 0} icon={<Undo size={16} />} />
               <ActionButton onClick={redo} disabled={redoStack.length === 0} icon={<Redo size={16} />} />
               <ActionButton onClick={clear} icon={<Trash2 size={16} />} />
-              <ActionButton onClick={saveToGallery} icon={<Save size={16} className={isSaving ? 'animate-pulse' : ''} />} />
+              <ActionButton 
+                onClick={saveToGallery} 
+                disabled={saveStatus === 'saving'}
+                icon={
+                  saveStatus === 'saving' ? (
+                    <Loader2 size={16} className="animate-spin text-zinc-500" />
+                  ) : saveStatus === 'success' ? (
+                    <motion.div
+                      key="checked"
+                      initial={{ scale: 0.4, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.4, opacity: 0 }}
+                      className="flex items-center justify-center text-emerald-500 font-bold"
+                    >
+                      <Check size={16} strokeWidth={3} />
+                    </motion.div>
+                  ) : saveStatus === 'error' ? (
+                    <span className="text-red-500 font-bold text-xs">!</span>
+                  ) : (
+                    <Save size={16} className="transition-all" />
+                  )
+                }
+                title="Save Drawing to Gallery"
+              />
               <div className="w-px h-4 bg-black/10 mx-1" />
               <button 
                 onClick={() => setBackgroundType(prev => 
@@ -1009,6 +1213,8 @@ export default function App() {
               </button>
               <ActionButton onClick={() => setShowLayers(!showLayers)} active={showLayers} icon={<Layers size={16} />} />
               <ActionButton onClick={() => setShowGallery(true)} icon={<Grid2X2 size={16} />} />
+              <ActionButton onClick={() => setShowDriveHub(true)} active={showDriveHub} icon={<Cloud size={16} />} />
+              <ActionButton onClick={() => setShowWorkspaceHub(true)} active={showWorkspaceHub} icon={<Briefcase size={16} />} />
             </div>
           </motion.div>
         )}
@@ -1030,7 +1236,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="flex flex-col gap-2 max-h-[40vh] overflow-y-auto pr-2">
+            <div className="flex flex-col gap-2 max-h-[40vh] overflow-y-auto touch-auto pr-2">
               {[...layers].reverse().map(layer => (
                 <div 
                   key={layer.id}
@@ -1219,7 +1425,7 @@ export default function App() {
             {/* Custom Palette Swatches */}
             <div className="space-y-2 pt-2 border-t border-black/5">
               <h4 className="text-[9px] font-mono uppercase tracking-widest text-zinc-400">Custom Swatches Saved</h4>
-              <div className="flex flex-wrap gap-2 max-h-20 overflow-y-auto pr-1">
+              <div className="flex flex-wrap gap-2 max-h-20 overflow-y-auto touch-auto pr-1">
                 {customSwatches.length === 0 ? (
                   <p className="text-[9px] text-zinc-400 italic">No custom swatches saved yet. Click Save Swatch above!</p>
                 ) : (
@@ -1254,7 +1460,7 @@ export default function App() {
             initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
-            className="absolute inset-0 bg-[#F5F5F0] z-[120] overflow-y-auto p-4 md:p-8 select-auto"
+            className="absolute inset-0 bg-[#F5F5F0] z-[120] overflow-y-auto touch-auto p-4 md:p-8 select-auto"
           >
             <div className="max-w-6xl mx-auto bg-white border border-black/10 rounded-[32px] overflow-hidden shadow-2xl min-h-[90vh] flex flex-col md:flex-row">
               {/* Left Column: User Profile & Quick States */}
@@ -1795,7 +2001,7 @@ export default function App() {
             initial={{ opacity: 0, x: '100%' }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: '100%' }}
-            className="absolute inset-0 bg-white z-[100] overflow-y-auto px-6 py-12 md:px-20"
+            className="absolute inset-0 bg-white z-[100] overflow-y-auto touch-auto px-6 py-12 md:px-20"
           >
             <div className="max-w-6xl mx-auto">
               <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-8">
@@ -1853,7 +2059,7 @@ export default function App() {
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
-            className="absolute bottom-0 inset-x-0 bg-black text-white p-8 md:p-12 z-[110] rounded-t-[40px] shadow-[0_-20px_50px_rgba(0,0,0,0.3)] max-h-[80vh] overflow-y-auto"
+            className="absolute bottom-0 inset-x-0 bg-black text-white p-8 md:p-12 z-[110] rounded-t-[40px] shadow-[0_-20px_50px_rgba(0,0,0,0.3)] max-h-[80vh] overflow-y-auto touch-auto"
           >
             <div className="max-w-3xl mx-auto">
               <div className="flex items-center justify-between mb-8">
@@ -1945,6 +2151,90 @@ export default function App() {
           </p>
         </div>
       )}
+
+      {/* Google Drive and Custom Picker System desk Overlay */}
+      <AnimatePresence>
+        {showDriveHub && (
+          <GoogleDriveHub
+            isOpen={showDriveHub}
+            onClose={() => setShowDriveHub(false)}
+            user={user}
+            driveToken={driveToken}
+            onConnectDrive={handleConnectDrive}
+            onDisconnectDrive={handleDisconnectDrive}
+            activeLayers={layers}
+            activeDataUrl={getCanvasDataUrl()}
+            loadedFileId={loadedDriveFileId}
+            loadedFileName={loadedDriveFileName}
+            onLoadWorkspace={handleLoadWorkspace}
+            onImportBackgroundImage={handleImportBackgroundImage}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Workspace Hub (Gmail, Tasks, Keep) Overlay */}
+      <AnimatePresence>
+        {showWorkspaceHub && (
+          <WorkspaceHub
+            isOpen={showWorkspaceHub}
+            onClose={() => setShowWorkspaceHub(false)}
+            user={user}
+            driveToken={driveToken}
+            activeDataUrl={getCanvasDataUrl()}
+            onReauthorize={handleConnectDrive}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Save Status Toast Notification */}
+      <AnimatePresence>
+        {saveStatus !== 'idle' && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.15 } }}
+            style={{ x: '-50%' }}
+            className={`fixed top-6 left-1/2 z-[250] max-w-sm w-[calc(100%-2rem)] sm:w-auto px-5 py-3 rounded-2xl flex items-center gap-3.5 shadow-[0_12px_45px_rgba(0,0,0,0.16)] border backdrop-blur-md transition-colors ${
+              saveStatus === 'saving'
+                ? 'bg-white/95 border-black/10 text-zinc-800'
+                : saveStatus === 'success'
+                ? 'bg-[#EBF7EE]/95 border-emerald-500/20 text-[#14532D]'
+                : 'bg-red-50/95 border-red-500/20 text-[#7F1D1D]'
+            }`}
+          >
+            {saveStatus === 'saving' && (
+              <Loader2 className="animate-spin text-zinc-500 shrink-0" size={18} />
+            )}
+            {saveStatus === 'success' && (
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-white shrink-0 shadow-sm"
+              >
+                <Check size={12} strokeWidth={3} />
+              </motion.div>
+            )}
+            {saveStatus === 'error' && (
+              <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center text-white shrink-0 shadow-sm">
+                <span className="font-extrabold text-[11px]">!</span>
+              </div>
+            )}
+            <div className="flex flex-col text-left">
+              <span className="text-[11px] font-bold uppercase tracking-wider">
+                {saveStatus === 'saving' ? 'Saving Drawing' : saveStatus === 'success' ? 'Drawing Saved' : 'Save Failed'}
+              </span>
+              <span className="text-[10px] text-zinc-500 font-medium -mt-0.5 leading-tight">
+                {saveStatus === 'saving' 
+                  ? 'Writing workspace data to cloud...' 
+                  : saveStatus === 'success' 
+                  ? 'Your sketch is now secured in your gallery.' 
+                  : 'Check your network and try again.'}
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -2013,12 +2303,13 @@ function ToolButton({ active, onClick, icon, label }: { active: boolean; onClick
   );
 }
 
-function ActionButton({ onClick, disabled, active, icon }: { onClick: () => void; disabled?: boolean; active?: boolean; icon: React.ReactNode }) {
+function ActionButton({ onClick, disabled, active, icon, title }: { onClick: () => void; disabled?: boolean; active?: boolean; icon: React.ReactNode; title?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       className={`p-2 rounded-xl transition-colors ${active ? 'bg-black text-white' : 'hover:bg-black/5 opacity-40 hover:opacity-100'} disabled:opacity-10 disabled:cursor-not-allowed`}
+      title={title}
     >
       {icon}
     </button>
