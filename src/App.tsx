@@ -54,24 +54,25 @@ import { db, auth, signIn, signOut, getAccessToken, setAccessToken } from './fir
 import LandingPage from './components/LandingPage';
 import GoogleDriveHub from './components/GoogleDriveHub';
 import WorkspaceHub from './components/WorkspaceHub';
+import CanvasStats from './components/CanvasStats';
 
 // --- Types ---
 
-interface Point {
+export interface Point {
   x: number;
   y: number;
   pressure: number;
   timestamp: number;
 }
 
-interface Stroke {
+export interface Stroke {
   points: Point[];
   color: string;
   width: number;
   mode: 'draw' | 'erase';
 }
 
-interface DrawingLayer {
+export interface DrawingLayer {
   id: string;
   name: string;
   strokes: Stroke[];
@@ -195,6 +196,7 @@ export default function App() {
   // Canvas State
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
+  const [workspaceSessionId, setWorkspaceSessionId] = useState<string>(() => Date.now().toString());
   const [layers, setLayers] = useState<DrawingLayer[]>([
     { id: 'layer-1', name: 'Background', strokes: [], visible: true, opacity: 1 }
   ]);
@@ -702,6 +704,7 @@ export default function App() {
       setRedoStack([]);
       setMode('draw');
       setAiInspiration(null);
+      setWorkspaceSessionId(Date.now().toString());
     }
   };
 
@@ -822,6 +825,7 @@ export default function App() {
     setLoadedDriveFileId(fileId);
     setLoadedDriveFileName(fileName);
     setRedoStack([]);
+    setWorkspaceSessionId(Date.now().toString());
   }, []);
 
   const handleImportBackgroundImage = useCallback((imageUrl: string) => {
@@ -849,6 +853,7 @@ export default function App() {
         }
         setRedoStack([]);
         setShowGallery(false);
+        setWorkspaceSessionId(Date.now().toString());
       } catch (e) {
         console.error("Failed to load drawing strokes", e);
       }
@@ -2150,6 +2155,16 @@ export default function App() {
             {layers.reduce((sum, l) => sum + l.strokes.length, 0)} STROKES • {layers.length} LAYERS • {mode.toUpperCase()}
           </p>
         </div>
+      )}
+
+      {/* Canvas Stats Overlay */}
+      {!showGallery && !showDashboard && !showLanding && (
+        <CanvasStats
+          layers={layers}
+          currentStroke={currentStroke}
+          isDrawing={isDrawing}
+          workspaceSessionId={workspaceSessionId}
+        />
       )}
 
       {/* Google Drive and Custom Picker System desk Overlay */}
