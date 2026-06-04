@@ -183,6 +183,7 @@ export default function App() {
   const [showGallery, setShowGallery] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [testPressure, setTestPressure] = useState(0.5);
+  const [pressureHistory, setPressureHistory] = useState<number[]>([]);
   const [isTestingPressure, setIsTestingPressure] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -383,6 +384,20 @@ export default function App() {
   });
 
   const rgb = useMemo(() => hexToRgb(color), [color]);
+
+  const pressureBins = useMemo(() => {
+    const bins = new Array(10).fill(0);
+    if (pressureHistory.length === 0) return bins;
+    for (const p of pressureHistory) {
+      const clamped = Math.max(0, Math.min(1, p));
+      const binIdx = Math.min(9, Math.floor(clamped * 10));
+      bins[binIdx]++;
+    }
+    return bins;
+  }, [pressureHistory]);
+
+  const activePressure = isTestingPressure ? testPressure : (currentStroke.length > 0 ? currentStroke[currentStroke.length - 1].pressure : 0);
+  const liveActive = isTestingPressure || isDrawing;
 
   const handleRgbChange = (channel: 'r' | 'g' | 'b', value: number) => {
     const newRgb = { ...rgb, [channel]: value };
@@ -596,6 +611,10 @@ export default function App() {
     const y = e.clientY - rect.top;
     const pressureVal = getPointerPressure(e, []);
     setCurrentStroke([{ x, y, pressure: pressureVal, timestamp: Date.now() }]);
+    setPressureHistory(prev => {
+      const next = [...prev, pressureVal];
+      return next.length > 2000 ? next.slice(next.length - 2000) : next;
+    });
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -607,6 +626,10 @@ export default function App() {
     const y = e.clientY - rect.top;
     const pressureVal = getPointerPressure(e);
     setCurrentStroke(prev => [...prev, { x, y, pressure: pressureVal, timestamp: Date.now() }]);
+    setPressureHistory(prev => {
+      const next = [...prev, pressureVal];
+      return next.length > 2000 ? next.slice(next.length - 2000) : next;
+    });
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -658,6 +681,10 @@ export default function App() {
     if (e.buttons > 0) {
       setTestPressure(pressure);
       setIsTestingPressure(true);
+      setPressureHistory(prev => {
+        const next = [...prev, pressure];
+        return next.length > 2000 ? next.slice(next.length - 2000) : next;
+      });
     } else if (e.pointerType === 'pen') {
       setTestPressure(pressure);
     }
@@ -1678,6 +1705,153 @@ export default function App() {
                           <p className="text-[8px] font-mono opacity-30 uppercase tracking-widest mt-1">
                             {isTestingPressure ? 'REGISTERING PRESSURE' : 'IDLE LEVEL'}
                           </p>
+                        </div>
+                      </div>
+
+                      {/* Pressure Distribution Histogram Visualizer */}
+                      <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm space-y-3 mb-4">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <h5 className="text-[10px] font-extrabold uppercase tracking-wider text-zinc-700">Pressure Mapping Histogram</h5>
+                            <p className="text-[8px] text-zinc-400 font-mono">
+                              {pressureHistory.length >= 2000 ? 'ROLLING CAPACITY LIMIT AT 2,000 SAMPLES' : `${pressureHistory.length} SAMPLE POINTS REGISTERED`}
+                            </p>
+                          </div>
+                          {pressureHistory.length > 0 && (
+                            <button
+                              onClick={() => setPressureHistory([])}
+                              className="text-[8px] font-mono hover:text-red-500 hover:border-red-400 uppercase font-bold border border-zinc-200 px-2 py-1 rounded-md transition-all active:scale-95"
+                            >
+                              Reset Live Data
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Summary Statistics Pill Grid */}
+                        <div className="grid grid-cols-4 gap-1.5 text-center">
+                          <div className="bg-[#F8F9FA] rounded-lg p-1.5 border border-black/5">
+                            <p className="text-[7.5px] font-mono text-zinc-400 uppercase tracking-wider font-semibold">Mean</p>
+                            <p className="text-[11px] font-mono font-bold text-zinc-800">
+                              {pressureHistory.length > 0
+                                ? `${((pressureHistory.reduce((s, x) => s + x, 0) / pressureHistory.length) * 100).toFixed(0)}%`
+                                : '0%'
+                              }
+                            </p>
+                          </div>
+                          <div className="bg-[#F8F9FA] rounded-lg p-1.5 border border-black/5">
+                            <p className="text-[7.5px] font-mono text-zinc-400 uppercase tracking-wider font-semibold">Min</p>
+                            <p className="text-[11px] font-mono font-bold text-zinc-800">
+                              {pressureHistory.length > 0
+                                ? `${(Math.min(...pressureHistory) * 100).toFixed(0)}%`
+                                : '0%'
+                              }
+                            </p>
+                          </div>
+                          <div className="bg-[#F8F9FA] rounded-lg p-1.5 border border-black/5">
+                            <p className="text-[7.5px] font-mono text-zinc-400 uppercase tracking-wider font-semibold">Max</p>
+                            <p className="text-[11px] font-mono font-bold text-zinc-800">
+                              {pressureHistory.length > 0
+                                ? `${(Math.max(...pressureHistory) * 100).toFixed(0)}%`
+                                : '0%'
+                              }
+                            </p>
+                          </div>
+                          <div className="bg-[#F8F9FA] rounded-lg p-1.5 border border-black/5">
+                            <p className="text-[7.5px] font-mono text-zinc-400 uppercase tracking-wider font-semibold">Count</p>
+                            <p className="text-[11px] font-mono font-bold text-zinc-800">
+                              {pressureHistory.length}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* SVG Histogram Canvas */}
+                        <div className="relative h-28 bg-[#fafafa] border border-black/5 rounded-lg flex flex-col justify-end overflow-hidden">
+                          {pressureHistory.length === 0 ? (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center pointer-events-none">
+                              <p className="text-[9px] font-mono text-zinc-400 uppercase tracking-wide font-black">No Diagnostics Logged</p>
+                              <p className="text-[8px] text-zinc-400 leading-normal max-w-[200px] mt-1">Please draw on the canvas or S-Pen test pad to generate diagnostic data map.</p>
+                            </div>
+                          ) : (() => {
+                            const maxCount = Math.max(...pressureBins, 1);
+                            const svgHeight = 70;
+                            const svgWidth = 280;
+                            const barWidth = 24;
+                            const gap = 3;
+                            
+                            return (
+                              <svg viewBox={`0 0 ${svgWidth} 100`} className="w-full h-full p-2" aria-label="Pressure Distribution Histogram">
+                                {/* Subtle grid lines */}
+                                <line x1="0" y1="15" x2={svgWidth} y2="15" stroke="#000" strokeOpacity="0.04" strokeWidth="1" strokeDasharray="2,2" />
+                                <line x1="0" y1="40" x2={svgWidth} y2="40" stroke="#000" strokeOpacity="0.04" strokeWidth="1" strokeDasharray="2,2" />
+                                <line x1="0" y1="65" x2={svgWidth} y2="65" stroke="#000" strokeOpacity="0.04" strokeWidth="1" strokeDasharray="2,2" />
+                                
+                                {pressureBins.map((count, i) => {
+                                  const h = (count / maxCount) * svgHeight;
+                                  const x = i * (barWidth + gap) + 6;
+                                  const y = svgHeight - h + 12;
+                                  const isActiveBin = liveActive && activePressure >= i / 10 && activePressure < (i + 1) / 10;
+                                  
+                                  return (
+                                    <g key={i} className="group">
+                                      {/* Highlight rectangle behind the bar when active */}
+                                      {isActiveBin && (
+                                        <rect
+                                          x={x - 1}
+                                          y={6}
+                                          width={barWidth + 2}
+                                          height={svgHeight + 10}
+                                          fill="#f97316"
+                                          fillOpacity="0.06"
+                                          rx="2"
+                                        />
+                                      )}
+
+                                      {/* SVG Rect bar */}
+                                      <rect
+                                        x={x}
+                                        y={y}
+                                        width={barWidth}
+                                        height={Math.max(2, h)}
+                                        rx="3"
+                                        fill={isActiveBin ? '#f97316' : '#27272a'}
+                                        opacity={isActiveBin ? 0.95 : (0.25 + (h / svgHeight) * 0.7)}
+                                        className="transition-all duration-300 hover:fill-orange-500 hover:opacity-100"
+                                      />
+                                      
+                                      {/* Count label above bar */}
+                                      {(count > 0 || isActiveBin) && (
+                                        <text
+                                          x={x + barWidth / 2}
+                                          y={y - 3}
+                                          textAnchor="middle"
+                                          className={`font-mono text-[6.5px] font-bold ${isActiveBin ? 'fill-orange-600' : 'fill-zinc-500'}`}
+                                        >
+                                          {count}
+                                        </text>
+                                      )}
+
+                                      {/* X Axis Labels under bar */}
+                                      <text
+                                        x={x + barWidth / 2}
+                                        y={svgHeight + 22}
+                                        textAnchor="middle"
+                                        className={`font-mono text-[6px] font-bold ${isActiveBin ? 'fill-orange-500' : 'fill-zinc-400'}`}
+                                      >
+                                        {(i / 10).toFixed(1)}
+                                      </text>
+                                    </g>
+                                  );
+                                })}
+                                {/* Base bottom axis line */}
+                                <line x1="0" y1={svgHeight + 12} x2={svgWidth} y2={svgHeight + 12} stroke="#000" strokeOpacity="0.08" strokeWidth="1" />
+                              </svg>
+                            );
+                          })()}
+                        </div>
+                        
+                        <div className="flex justify-between items-center text-[7.5px] font-mono text-zinc-400 px-1 opacity-70 uppercase leading-none">
+                          <span>Hover / Light Touch</span>
+                          <span>Max Force (100%)</span>
                         </div>
                       </div>
 
