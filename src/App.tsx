@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { jsPDF } from 'jspdf';
 import { 
   Pencil, 
   Eraser, 
@@ -55,6 +56,8 @@ import LandingPage from './components/LandingPage';
 import GoogleDriveHub from './components/GoogleDriveHub';
 import WorkspaceHub from './components/WorkspaceHub';
 import CanvasStats from './components/CanvasStats';
+import AndroidDevHub from './components/AndroidDevHub';
+import { Smartphone } from 'lucide-react';
 
 // --- Types ---
 
@@ -184,10 +187,12 @@ export default function App() {
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [pdfExportStatus, setPdfExportStatus] = useState<'idle' | 'exporting' | 'success' | 'error'>('idle');
 
   // Google Drive & Picker state
   const [showDriveHub, setShowDriveHub] = useState(false);
   const [showWorkspaceHub, setShowWorkspaceHub] = useState(false);
+  const [showAndroidDevHub, setShowAndroidDevHub] = useState(false);
   const [driveToken, setDriveToken] = useState<string | null>(null);
   const [loadedDriveFileId, setLoadedDriveFileId] = useState<string | null>(null);
   const [loadedDriveFileName, setLoadedDriveFileName] = useState<string | null>(null);
@@ -765,6 +770,53 @@ export default function App() {
     }
   };
 
+  const exportToPdf = async () => {
+    setPdfExportStatus('exporting');
+    try {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        setPdfExportStatus('error');
+        setTimeout(() => setPdfExportStatus('idle'), 3000);
+        return;
+      }
+
+      const dataUrl = getCanvasDataUrl();
+      if (!dataUrl) {
+        setPdfExportStatus('error');
+        setTimeout(() => setPdfExportStatus('idle'), 3000);
+        return;
+      }
+
+      // Capture exact canvas dimensions
+      const width = canvas.width;
+      const height = canvas.height;
+      const orientation = width > height ? 'landscape' : 'portrait';
+
+      // Initialize jsPDF with matching canvas dimensions for pixel-perfect scaling
+      const doc = new jsPDF({
+        orientation: orientation,
+        unit: 'px',
+        format: [width, height],
+        compress: true
+      });
+
+      // Render the PNG image onto the PDF page
+      doc.addImage(dataUrl, 'PNG', 0, 0, width, height, undefined, 'FAST');
+
+      // Descriptive PDF file name with date timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `SPenDraw_Workspace_${timestamp}.pdf`;
+
+      doc.save(fileName);
+      setPdfExportStatus('success');
+      setTimeout(() => setPdfExportStatus('idle'), 3000);
+    } catch (err) {
+      console.error('PDF Export Error:', err);
+      setPdfExportStatus('error');
+      setTimeout(() => setPdfExportStatus('idle'), 3000);
+    }
+  };
+
   const getAiInspiration = async (drawing: Drawing) => {
     setIsAiProcessing(true);
     setAiInspiration(null);
@@ -1001,64 +1053,45 @@ export default function App() {
         onPointerLeave={handlePointerUp}
       />
 
-      {/* Top Center Focus Mode Switch (Manual Touch & Pen Focus Toggle) */}
-      {!showGallery && !showDashboard && (
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-45 flex items-center bg-white/80 backdrop-blur-md p-1 rounded-full border border-black/10 shadow-lg pointer-events-auto">
-          <button
-            onClick={() => setFocusModeExplicit('touch')}
-            className={`px-3.5 py-1.5 rounded-full flex items-center gap-1.5 text-[10px] uppercase font-extrabold tracking-wider transition-all duration-250 ${
-              focusMode === 'touch'
-                ? 'bg-black text-white shadow-sm scale-102'
-                : 'text-zinc-500 hover:text-zinc-805 hover:bg-black/5'
-            }`}
-            title="Switch Focus to touch and mouse control (Fingers / generic pens draw freely)"
+      {/* Top Left Menu & Status Banner Stacked Column */}
+      <div className="absolute top-6 left-6 z-40 flex flex-col gap-2.5 items-start pointer-events-none">
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <button 
+            onClick={() => setShowLanding(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/80 backdrop-blur hover:bg-white text-zinc-800 rounded-full text-[10.5px] uppercase font-bold border border-black/10 shadow-sm transition-all duration-200 active:scale-95"
+            title="Return to Welcome Landing"
           >
-            <Hand size={11} />
-            <span>Touch Focus</span>
+            <Home size={13} className="text-zinc-700" />
+            <span>Welcome Page</span>
           </button>
-          
-          <button
-            onClick={() => setFocusModeExplicit('pen')}
-            className={`px-3.5 py-1.5 rounded-full flex items-center gap-1.5 text-[10px] uppercase font-extrabold tracking-wider transition-all duration-250 ${
-              focusMode === 'pen'
-                ? 'bg-black text-white shadow-sm scale-102'
-                : 'text-zinc-500 hover:text-zinc-805 hover:bg-black/5'
-            }`}
-            title="Switch Focus to Pen drawing only (Disables touch to act as full hardware palm rejection)"
-          >
-            <Pencil size={11} />
-            <span>Pen Focus</span>
-          </button>
+          {user ? (
+            <button 
+              onClick={() => setShowDashboard(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-white/80 backdrop-blur rounded-full border border-black/10 shadow-sm hover:scale-105 active:scale-95 hover:bg-white transition-all duration-200"
+              title="Open Home Dashboard"
+            >
+              <img src={user.photoURL || ''} className="w-6 h-6 rounded-full border border-black/10" alt="avatar" />
+              <span className="text-[10.5px] font-bold uppercase tracking-tight max-w-[100px] truncate">{user.displayName}</span>
+            </button>
+          ) : (
+            <button 
+              onClick={() => setShowDashboard(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-full text-[10.5px] uppercase font-bold shadow-lg hover:scale-105 transition-transform active:scale-95"
+              title="Open Home Dashboard"
+            >
+              <UserIcon size={14} /> Dashboard Home
+            </button>
+          )}
         </div>
-      )}
 
-      {/* Auth Indicator / Home Dashboard Shortcut */}
-      <div className="absolute top-6 left-6 z-40 flex items-center gap-2">
-        <button 
-          onClick={() => setShowLanding(true)}
-          className="flex items-center gap-1.5 px-3.5 py-2 bg-white/80 backdrop-blur hover:bg-white text-zinc-800 rounded-full text-[10.5px] uppercase font-bold border border-black/10 shadow-sm transition-all duration-200 active:scale-95"
-          title="Return to Welcome Landing"
-        >
-          <Home size={13} className="text-zinc-700" />
-          <span>Welcome Page</span>
-        </button>
-        {user ? (
-          <button 
-            onClick={() => setShowDashboard(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-white/80 backdrop-blur rounded-full border border-black/10 shadow-sm hover:scale-105 active:scale-95 hover:bg-white transition-all duration-200"
-            title="Open Home Dashboard"
-          >
-            <img src={user.photoURL || ''} className="w-6 h-6 rounded-full border border-black/10" alt="avatar" />
-            <span className="text-[10.5px] font-bold uppercase tracking-tight max-w-[100px] truncate">{user.displayName}</span>
-          </button>
-        ) : (
-          <button 
-            onClick={() => setShowDashboard(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-full text-[10.5px] uppercase font-bold shadow-lg hover:scale-105 transition-transform active:scale-95"
-            title="Open Home Dashboard"
-          >
-            <UserIcon size={14} /> Dashboard Home
-          </button>
+        {/* Overlay Status info neatly tucked below the auth/home buttons without collision */}
+        {!showGallery && !showDashboard && !showLanding && (
+          <div className="pl-1.5 pointer-events-none opacity-35 flex flex-col gap-0.5">
+            <h1 className="text-[10px] font-black tracking-tighter uppercase italic text-zinc-900">S Pen Draw Pro</h1>
+            <p className="text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-700">
+              {layers.reduce((sum, l) => sum + l.strokes.length, 0)} STROKES • {layers.length} LAYERS • {mode.toUpperCase()}
+            </p>
+          </div>
         )}
       </div>
 
@@ -1207,6 +1240,30 @@ export default function App() {
                 }
                 title="Save Drawing to Gallery"
               />
+              <ActionButton 
+                onClick={exportToPdf} 
+                disabled={pdfExportStatus === 'exporting'}
+                icon={
+                  pdfExportStatus === 'exporting' ? (
+                    <Loader2 size={16} className="animate-spin text-zinc-500" />
+                  ) : pdfExportStatus === 'success' ? (
+                    <motion.div
+                      key="pdf-checked"
+                      initial={{ scale: 0.4, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.4, opacity: 0 }}
+                      className="flex items-center justify-center text-emerald-500 font-bold"
+                    >
+                      <Check size={16} strokeWidth={3} />
+                    </motion.div>
+                  ) : pdfExportStatus === 'error' ? (
+                    <span className="text-red-500 font-bold text-xs">!</span>
+                  ) : (
+                    <Download size={16} className="transition-all" />
+                  )
+                }
+                title="Export Workspace as PDF"
+              />
               <div className="w-px h-4 bg-black/10 mx-1" />
               <button 
                 onClick={() => setBackgroundType(prev => 
@@ -1220,6 +1277,7 @@ export default function App() {
               <ActionButton onClick={() => setShowGallery(true)} icon={<Grid2X2 size={16} />} />
               <ActionButton onClick={() => setShowDriveHub(true)} active={showDriveHub} icon={<Cloud size={16} />} />
               <ActionButton onClick={() => setShowWorkspaceHub(true)} active={showWorkspaceHub} icon={<Briefcase size={16} />} />
+              <ActionButton onClick={() => setShowAndroidDevHub(true)} active={showAndroidDevHub} icon={<Smartphone size={16} />} title="Android S Pen Dev Hub (AI)" />
             </div>
           </motion.div>
         )}
@@ -2137,23 +2195,45 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Floating Toolbar Toggle */}
-      {!showGallery && (
-        <button
-          onClick={() => setShowToolbar(!showToolbar)}
-          className="absolute top-6 right-6 w-10 h-10 bg-white/80 backdrop-blur border border-black/10 rounded-full flex items-center justify-center shadow-lg transition-transform active:scale-90 z-50 hover:bg-white"
-        >
-          <RotateCcw size={18} className={`transition-transform duration-500 ${showToolbar ? 'rotate-180' : 'rotate-0'}`} />
-        </button>
-      )}
+      {/* Top Right Unified Controls Header */}
+      {!showGallery && !showDashboard && !showLanding && (
+        <div className="absolute top-6 right-6 z-50 flex items-center gap-2 pointer-events-none">
+          {/* Focus Mode Switch (Touch vs Pen toggle) */}
+          <div className="flex items-center bg-white/85 backdrop-blur border border-black/10 p-1 rounded-full shadow-lg pointer-events-auto">
+            <button
+              onClick={() => setFocusModeExplicit('touch')}
+              className={`px-3.5 py-1.5 rounded-full flex items-center gap-1.5 text-[9.5px] uppercase font-black tracking-wider transition-all duration-200 ${
+                focusMode === 'touch'
+                  ? 'bg-black text-white shadow-sm scale-102'
+                  : 'text-zinc-500 hover:text-zinc-800 hover:bg-black/5'
+              }`}
+              title="Switch Focus to touch and mouse control (Fingers / generic pens draw freely)"
+            >
+              <Hand size={11} />
+              <span>Touch Focus</span>
+            </button>
+            <button
+              onClick={() => setFocusModeExplicit('pen')}
+              className={`px-3.5 py-1.5 rounded-full flex items-center gap-1.5 text-[9.5px] uppercase font-black tracking-wider transition-all duration-200 ${
+                focusMode === 'pen'
+                  ? 'bg-black text-white shadow-sm scale-102'
+                  : 'text-zinc-500 hover:text-zinc-800 hover:bg-black/5'
+              }`}
+              title="Switch Focus to Pen drawing only (Disables touch to act as full hardware palm rejection)"
+            >
+              <Pencil size={11} />
+              <span>Pen Focus</span>
+            </button>
+          </div>
 
-      {/* Overlay Status */}
-      {!showGallery && (
-        <div className="absolute top-6 left-24 flex flex-col gap-0.5 pointer-events-none opacity-30">
-          <h1 className="text-[10px] font-black tracking-tighter uppercase italic">S Pen Draw Pro</h1>
-          <p className="text-[8px] font-mono uppercase tracking-[0.2em]">
-            {layers.reduce((sum, l) => sum + l.strokes.length, 0)} STROKES • {layers.length} LAYERS • {mode.toUpperCase()}
-          </p>
+          {/* Floating Toolbar Toggle Button */}
+          <button
+            onClick={() => setShowToolbar(!showToolbar)}
+            className="w-10 h-10 bg-white/85 backdrop-blur border border-black/10 rounded-full flex items-center justify-center shadow-lg transition-transform active:scale-95 hover:bg-white pointer-events-auto"
+            title="Toggle Drawing Toolbar"
+          >
+            <RotateCcw size={18} className={`transition-transform duration-500 ${showToolbar ? 'rotate-180' : 'rotate-0'}`} />
+          </button>
         </div>
       )}
 
@@ -2197,6 +2277,18 @@ export default function App() {
             driveToken={driveToken}
             activeDataUrl={getCanvasDataUrl()}
             onReauthorize={handleConnectDrive}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Android S Pen Dev Hub (Gemini Active Vector Architect) Overlay */}
+      <AnimatePresence>
+        {showAndroidDevHub && (
+          <AndroidDevHub
+            isOpen={showAndroidDevHub}
+            onClose={() => setShowAndroidDevHub(false)}
+            activeDataUrl={getCanvasDataUrl()}
+            layers={layers}
           />
         )}
       </AnimatePresence>
@@ -2245,6 +2337,56 @@ export default function App() {
                   : saveStatus === 'success' 
                   ? 'Your sketch is now secured in your gallery.' 
                   : 'Check your network and try again.'}
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PDF Export Status Toast Notification */}
+      <AnimatePresence>
+        {pdfExportStatus !== 'idle' && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.15 } }}
+            style={{ x: '-50%' }}
+            className={`fixed top-6 left-1/2 z-[250] max-w-sm w-[calc(100%-2rem)] sm:w-auto px-5 py-3 rounded-2xl flex items-center gap-3.5 shadow-[0_12px_45px_rgba(0,0,0,0.16)] border backdrop-blur-md transition-colors ${
+              pdfExportStatus === 'exporting'
+                ? 'bg-white/95 border-black/10 text-zinc-800'
+                : pdfExportStatus === 'success'
+                ? 'bg-[#EBF7EE]/95 border-emerald-500/20 text-[#14532D]'
+                : 'bg-red-50/95 border-red-500/20 text-[#7F1D1D]'
+            }`}
+          >
+            {pdfExportStatus === 'exporting' && (
+              <Loader2 className="animate-spin text-zinc-500 shrink-0" size={18} />
+            )}
+            {pdfExportStatus === 'success' && (
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-white shrink-0 shadow-sm"
+              >
+                <Check size={12} strokeWidth={3} />
+              </motion.div>
+            )}
+            {pdfExportStatus === 'error' && (
+              <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center text-white shrink-0 shadow-sm">
+                <span className="font-extrabold text-[11px]">!</span>
+              </div>
+            )}
+            <div className="flex flex-col text-left">
+              <span className="text-[11px] font-bold uppercase tracking-wider">
+                {pdfExportStatus === 'exporting' ? 'Exporting PDF' : pdfExportStatus === 'success' ? 'PDF Exported' : 'Export Failed'}
+              </span>
+              <span className="text-[10px] text-zinc-500 font-medium -mt-0.5 leading-tight">
+                {pdfExportStatus === 'exporting' 
+                  ? 'Compiling layers and scaling artwork...' 
+                  : pdfExportStatus === 'success' 
+                  ? 'High-quality document saved and download started.' 
+                  : 'Check your canvas data and try again.'}
               </span>
             </div>
           </motion.div>

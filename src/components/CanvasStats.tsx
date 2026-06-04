@@ -173,14 +173,17 @@ export default function CanvasStats({
           <motion.button
             key="collapsed-stats"
             layoutId="stats-card"
+            drag
+            dragMomentum={false}
+            dragElastic={0.05}
             onClick={() => setIsExpanded(true)}
             initial={{ opacity: 0, scale: 0.9, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 10 }}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            className="flex items-center gap-3.5 px-4.5 py-2.5 bg-white/90 backdrop-blur-xl border border-black/10 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.08)] cursor-pointer select-none text-zinc-800 transition-shadow hover:shadow-[0_12px_40px_rgba(0,0,0,0.12)]"
-            title="Examine detailed canvas canvas stats"
+            className="flex items-center gap-3.5 px-4.5 py-2.5 bg-white/90 backdrop-blur-xl border border-black/10 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.08)] cursor-grab active:cursor-grabbing select-none text-zinc-800 transition-shadow hover:shadow-[0_12px_40px_rgba(0,0,0,0.12)]"
+            title="Examine detailed canvas canvas stats (Drag to move)"
           >
             {/* Live Indicator */}
             <div className="flex items-center gap-1.5 border-r border-black/5 pr-2.5 shrink-0">
@@ -214,13 +217,19 @@ export default function CanvasStats({
           <motion.div
             key="expanded-stats"
             layoutId="stats-card"
+            drag
+            dragMomentum={false}
+            dragElastic={0.05}
             initial={{ opacity: 0, scale: 0.95, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            className="w-72 bg-white/95 backdrop-blur-xl border border-black/10 rounded-[28px] shadow-[0_15px_50px_rgba(0,0,0,0.12)] p-5.5 flex flex-col gap-4 text-zinc-800"
+            className="w-72 bg-white/95 backdrop-blur-xl border border-black/10 rounded-[28px] shadow-[0_15px_50px_rgba(0,0,0,0.12)] p-5.5 flex flex-col gap-4 text-zinc-800 cursor-grab active:cursor-grabbing select-none"
           >
+            {/* Grab Drag handle indicator bar */}
+            <div className="w-8 h-1 bg-zinc-400/35 rounded-full mx-auto -mt-2 mb-1 shrink-0" />
+
             {/* Header with toggle and title */}
-            <div className="flex items-center justify-between pb-2 border-b border-black/5">
+            <div className="flex items-center justify-between pb-2 border-b border-black/5" onPointerDown={e => e.stopPropagation()}>
               <div className="flex items-center gap-2">
                 <div className="p-1 px-1.5 rounded-lg bg-zinc-100 text-zinc-650 flex items-center justify-center font-mono text-[8px] uppercase tracking-wider leading-none">
                   Live
@@ -228,7 +237,8 @@ export default function CanvasStats({
                 <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900">Canvas Analytics</h3>
               </div>
               <button
-                onClick={() => setIsExpanded(false)}
+                onClick={(e) => { e.stopPropagation(); setIsExpanded(false); }}
+                onPointerDown={(e) => e.stopPropagation()}
                 className="p-1 hover:bg-black/5 text-zinc-405 hover:text-zinc-650 rounded-lg transition-colors cursor-pointer"
                 title="Minimize Stats Card"
               >
@@ -237,7 +247,7 @@ export default function CanvasStats({
             </div>
 
             {/* 1. Timer / Duration Active HUD Section */}
-            <div className="bg-zinc-50 border border-black/5 rounded-2xl p-3 flex items-center justify-between shadow-sm">
+            <div className="bg-zinc-50 border border-black/5 rounded-2xl p-3 flex items-center justify-between shadow-sm" onPointerDown={e => e.stopPropagation()}>
               <div className="flex items-center gap-2.5">
                 <div className={`p-2 rounded-xl flex items-center justify-center ${isTimerPaused ? 'bg-zinc-200 text-zinc-500' : 'bg-emerald-50 text-emerald-600'}`}>
                   <Timer size={15} className={isTimerPaused ? '' : 'animate-spin-slow'} />
@@ -251,7 +261,7 @@ export default function CanvasStats({
               </div>
 
               {/* Timer Control Buttons */}
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
                 <button
                   onClick={handleTogglePause}
                   className={`p-1.5 rounded-lg border transition-all ${
@@ -274,7 +284,7 @@ export default function CanvasStats({
             </div>
 
             {/* 2. core grid details: Strokes & Distance */}
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-2 gap-2.5" onPointerDown={e => e.stopPropagation()}>
               {/* Strokes Card */}
               <div className="bg-zinc-50/50 border border-black/5 rounded-2xl p-3 text-left">
                 <span className="text-[9px] font-mono uppercase tracking-wider font-extrabold text-zinc-400 flex items-center gap-1">
@@ -307,10 +317,10 @@ export default function CanvasStats({
             </div>
 
             {/* 3. Dynamic Pen performance analytics */}
-            <div className="space-y-2 text-left pt-1">
+            <div className="space-y-2 text-left pt-1" onPointerDown={e => e.stopPropagation()}>
               <span className="text-[8px] font-mono uppercase tracking-wider font-black text-zinc-400 block px-1">Performance Dynamics</span>
               
-              <div className="space-y-2 border border-black/5 bg-zinc-50/20 p-2.5 rounded-2xl">
+              <div className="space-y-2 border border-black/5 bg-zinc-50/20 p-2.5 rounded-2xl" onPointerDown={(e) => e.stopPropagation()}>
                 {/* Active drawing speed */}
                 <div className="flex items-center justify-between text-[10px]">
                   <span className="text-zinc-500 font-medium flex items-center gap-1.5">
@@ -323,7 +333,7 @@ export default function CanvasStats({
 
                 {/* Average line length */}
                 <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-zinc-500 font-medium flex items-center gap-1.5">
+                  <span className="text-zinc-550 font-medium flex items-center gap-1.5">
                     <Sparkles size={11} className="text-blue-500" /> Avg Stroke Length:
                   </span>
                   <span className="font-mono font-bold text-zinc-800">
@@ -334,7 +344,7 @@ export default function CanvasStats({
                 {/* Pen Pressure Registered Peak */}
                 <div className="space-y-1 pt-1.5 border-t border-black/5">
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-zinc-500 font-medium flex items-center gap-1.2">
+                    <span className="text-zinc-505 font-medium flex items-center gap-1.2">
                       <Percent size={11} className="text-purple-500" /> Peak Pen Pressure:
                     </span>
                     <span className="font-mono font-extrabold text-zinc-800 leading-none">
@@ -356,7 +366,7 @@ export default function CanvasStats({
             </div>
 
             {/* Footer Workspace Info */}
-            <div className="text-[8.5px] text-zinc-400 font-mono text-center select-none pt-1">
+            <div className="text-[8.5px] text-zinc-400 font-mono text-center select-none pt-1" onPointerDown={e => e.stopPropagation()}>
               Stats resets automatically upon workspace changes.
             </div>
           </motion.div>
