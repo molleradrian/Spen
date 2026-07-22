@@ -36,7 +36,9 @@ import {
   Check,
   Loader2,
   Cloud,
-  Briefcase
+  Briefcase,
+  AlertTriangle,
+  ExternalLink
 } from 'lucide-react';
 import { 
   collection, 
@@ -195,6 +197,9 @@ export default function App() {
   const [showWorkspaceHub, setShowWorkspaceHub] = useState(false);
   const [showAndroidDevHub, setShowAndroidDevHub] = useState(false);
   const [driveToken, setDriveToken] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showAuthErrorModal, setShowAuthErrorModal] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [loadedDriveFileId, setLoadedDriveFileId] = useState<string | null>(null);
   const [loadedDriveFileName, setLoadedDriveFileName] = useState<string | null>(null);
   const [canvasBackgroundImage, setCanvasBackgroundImage] = useState<string | null>(null);
@@ -283,17 +288,142 @@ export default function App() {
     }
   });
 
+  const handleSignIn = async () => {
+    try {
+      setAuthError(null);
+      const u = await signIn();
+      return u;
+    } catch (err: any) {
+      console.error("Authentication failed:", err);
+      const errMsg = err?.message || String(err);
+      
+      if (
+        errMsg.includes("popup-closed-by-user") || 
+        errMsg.includes("cancelled-by-user") ||
+        errMsg.includes("popup-blocked") ||
+        (window.self !== window.top)
+      ) {
+        setAuthError(
+          "Standard Google authentication popups and third-party session cookies are blocked or fail to communicate inside cross-origin preview iframes. To authenticate and save your drawings securely, you just need to open this application in a top-level window (new tab)."
+        );
+      } else {
+        setAuthError(errMsg);
+      }
+      setShowAuthErrorModal(true);
+      throw err;
+    }
+  };
+
+  const handleCopyAppUrl = () => {
+    try {
+      navigator.clipboard.writeText(window.location.href);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const renderAuthErrorModal = () => {
+    if (!showAuthErrorModal) return null;
+    return (
+      <AnimatePresence>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            className="bg-white border border-black/10 rounded-[24px] p-6 max-w-md w-full shadow-2xl relative space-y-6"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-amber-50 border border-amber-200 rounded-full flex items-center justify-center text-amber-500 shrink-0">
+                <AlertTriangle size={22} />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <h3 className="font-extrabold text-sm uppercase tracking-widest text-zinc-900">
+                  Iframe Security Intercept
+                </h3>
+                <p className="text-[10px] text-zinc-400 font-mono uppercase tracking-wider">
+                  Firebase Popups vs Cross-Origin Iframes
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowAuthErrorModal(false)}
+                className="p-1.5 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-all active:scale-95 cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-zinc-600 leading-relaxed bg-zinc-50 border border-black/5 p-3.5 rounded-xl font-medium">
+                {authError || "Standard authentication popups and sessions are restricted inside preview frames."}
+              </p>
+              
+              <div className="space-y-2 pt-1 text-xs text-zinc-700">
+                <p className="font-extrabold text-[9.5px] uppercase tracking-widest text-zinc-800">
+                  How to authenticate successfully:
+                </p>
+                <ol className="list-decimal list-inside space-y-1.5 text-zinc-500 text-[11px] font-medium leading-relaxed pl-1">
+                  <li>
+                    Look at the <span className="font-bold text-zinc-800">very top-right corner</span> of your AI Studio preview.
+                  </li>
+                  <li>
+                    Click the <span className="font-bold text-zinc-800">"Open in New Tab"</span> button (with the small arrow pointing up-right).
+                  </li>
+                  <li>
+                    Sign in securely inside that top-level window context!
+                  </li>
+                </ol>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                onClick={handleCopyAppUrl}
+                className="w-full py-3 px-4 border border-zinc-200 hover:border-zinc-400 rounded-xl text-[10.5px] uppercase font-bold tracking-wider text-zinc-700 hover:text-zinc-900 transition-all flex items-center justify-center gap-2 bg-white active:scale-95 cursor-pointer"
+              >
+                {copiedLink ? (
+                  <>
+                    <Check size={14} className="text-green-600" />
+                    <span>Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={13} />
+                    <span>Copy Direct Link</span>
+                  </>
+                )}
+              </button>
+
+              <a
+                href={window.location.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setShowAuthErrorModal(false)}
+                className="w-full py-3 px-4 bg-black hover:bg-neutral-900 text-white rounded-xl text-[10.5px] uppercase font-bold tracking-widest transition-all hover:translate-y-[-1px] active:translate-y-[1px] flex items-center justify-center gap-2 cursor-pointer shadow-md text-center"
+              >
+                <span>Launch in New Tab</span>
+                <ExternalLink size={13} />
+              </a>
+            </div>
+          </motion.div>
+        </div>
+      </AnimatePresence>
+    );
+  };
+
   // Flutter draw code simulation state
   const [flutterMultiplier, setFlutterMultiplier] = useState(3.0);
   const [isCopied, setIsCopied] = useState(false);
 
   const copyFlutterCode = useCallback(() => {
-    const code = `void onPanUpdate(GestureDragUpdateDetails details) {
-  // Access hardware input pressure from touch/pencil
+    const code = `void onPanUpdate(DragUpdateDetails details) {
+  // Access S Pen hardware pressure value from DragUpdateDetails
   double pressure = details.pressure ?? 1.0;
   
-  // Dynamically scale strokeWidth of Paint object based on pressure
-  double strokeWidth = ${flutterMultiplier.toFixed(1)} * pressure;
+  // Dynamically adjust strokeWidth of Paint object based on pressure
+  double strokeWidth = ${flutterMultiplier.toFixed(1)} * details.pressure;
   
   setState(() {
     points.add(DrawingPoint(
@@ -742,7 +872,7 @@ export default function App() {
 
   const saveToGallery = async () => {
     if (!user) {
-      signIn();
+      handleSignIn().catch(() => {});
       return;
     }
     const hasStrokes = layers.some(l => l.strokes.length > 0);
@@ -872,14 +1002,17 @@ export default function App() {
   // --- Google Drive Commands ---
   const handleConnectDrive = async () => {
     try {
-      const u = await signIn();
+      const u = await handleSignIn();
       const token = await getAccessToken();
       setDriveToken(token);
       setUser(u);
       return token;
     } catch (err: any) {
       console.error("Failed to connect Google Drive:", err);
-      alert(`Sync Error: ${err.message || err}`);
+      const errMsg = err?.message || String(err);
+      if (!errMsg.includes("popup-closed-by-user") && !errMsg.includes("cancelled-by-user") && !errMsg.includes("popup-blocked")) {
+        alert(`Sync Error: ${err.message || err}`);
+      }
       return null;
     }
   };
@@ -1004,33 +1137,36 @@ export default function App() {
 
   if (!user) {
     return (
-      <LandingPage
-        user={user}
-        onEnterCanvas={() => setShowLanding(false)}
-        onOpenDashboard={() => {
-          setShowLanding(false);
-          setShowDashboard(true);
-        }}
-        onOpenGallery={() => {
-          setShowLanding(false);
-          setShowGallery(true);
-        }}
-        onSignIn={signIn}
-        savedDrawingsCount={drawings.length}
-        allowTouch={allowTouch}
-        setAllowTouch={(val) => {
-          setAllowTouch(val);
-          setPenOnly(allowPen && !val && !allowMouse);
-        }}
-        simulationMode={simulationMode}
-        setSimulationMode={setSimulationMode}
-        pressureOffset={pressureOffset}
-        setPressureOffset={setPressureOffset}
-        pressureScale={pressureScale}
-        setPressureScale={setPressureScale}
-        focusMode={focusMode}
-        setFocusModeExplicit={setFocusModeExplicit}
-      />
+      <>
+        <LandingPage
+          user={user}
+          onEnterCanvas={() => setShowLanding(false)}
+          onOpenDashboard={() => {
+            setShowLanding(false);
+            setShowDashboard(true);
+          }}
+          onOpenGallery={() => {
+            setShowLanding(false);
+            setShowGallery(true);
+          }}
+          onSignIn={handleSignIn}
+          savedDrawingsCount={drawings.length}
+          allowTouch={allowTouch}
+          setAllowTouch={(val) => {
+            setAllowTouch(val);
+            setPenOnly(allowPen && !val && !allowMouse);
+          }}
+          simulationMode={simulationMode}
+          setSimulationMode={setSimulationMode}
+          pressureOffset={pressureOffset}
+          setPressureOffset={setPressureOffset}
+          pressureScale={pressureScale}
+          setPressureScale={setPressureScale}
+          focusMode={focusMode}
+          setFocusModeExplicit={setFocusModeExplicit}
+        />
+        {renderAuthErrorModal()}
+      </>
     );
   }
 
@@ -1039,6 +1175,7 @@ export default function App() {
       ref={containerRef}
       className={`relative w-full h-screen bg-[#F5F5F0] overflow-hidden select-none touch-none font-sans`}
     >
+      {renderAuthErrorModal()}
       <div 
         className="absolute inset-0 pointer-events-none opacity-[0.03]"
         style={{ 
@@ -1610,7 +1747,7 @@ export default function App() {
                         <p className="text-[10px] text-zinc-500 leading-relaxed">Log in with your Google account to enable secure database backups and Gemini assistant recommendations!</p>
                       </div>
                       <button 
-                        onClick={() => { signIn(); }}
+                        onClick={() => { handleSignIn().catch(() => {}); }}
                         className="w-full py-2.5 bg-black text-white text-[10px] uppercase font-bold rounded-xl hover:bg-zinc-800 transition-colors tracking-widest shadow-md"
                       >
                         Connect Google Account
@@ -2161,12 +2298,12 @@ export default function App() {
                             )}
                           </button>
                           <pre className="text-left select-text pr-12 leading-relaxed overflow-x-auto whitespace-pre">
-{`void onPanUpdate(GestureDragUpdateDetails details) {
-  // Access input pressure level (stylus/mouse)
+{`void onPanUpdate(DragUpdateDetails details) {
+  // Access S Pen hardware pressure value from DragUpdateDetails
   double pressure = details.pressure ?? 1.0;
   
-  // Heavier press dynamically adjusts the strokeWidth of the brush
-  double strokeWidth = ${flutterMultiplier.toFixed(1)} * pressure;
+  // Dynamically adjust strokeWidth of Paint object based on pressure
+  double strokeWidth = ${flutterMultiplier.toFixed(1)} * details.pressure;
   
   setState(() {
     points.add(DrawingPoint(
@@ -2349,7 +2486,7 @@ export default function App() {
                 setShowLanding(false);
                 setShowGallery(true);
               }}
-              onSignIn={signIn}
+              onSignIn={handleSignIn}
               savedDrawingsCount={drawings.length}
               allowTouch={allowTouch}
               setAllowTouch={(val) => {
