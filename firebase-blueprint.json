@@ -1,42 +1,119 @@
 {
   "entities": {
-    "Drawing": {
-      "title": "Drawing",
-      "description": "User created drawings",
+    "User": {
+      "title": "User",
+      "description": "User profile",
       "type": "object",
       "properties": {
-        "userId": {
-          "type": "string",
-          "description": "The UID of the owner"
-        },
-        "title": {
-          "type": "string",
-          "description": "Title of the drawing"
-        },
-        "dataUrl": {
-          "type": "string",
-          "description": "Base64 image representation"
-        },
-        "strokes": {
-          "type": "string",
-          "description": "JSON stringified strokes array"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "ownerUserID": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" }
       },
-      "required": ["userId", "dataUrl", "createdAt", "updatedAt"]
+      "required": ["ownerUserID", "email"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Zign Client Record",
+      "type": "object",
+      "properties": {
+        "ownerUserID": { "type": "string" },
+        "companyName": { "type": "string" },
+        "contactName": { "type": "string" },
+        "brandDNA": { "type": "string" }
+      },
+      "required": ["ownerUserID", "companyName"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Zign Project Record",
+      "type": "object",
+      "properties": {
+        "ownerUserID": { "type": "string" },
+        "ownerClientID": { "type": "string" },
+        "projectName": { "type": "string" },
+        "status": { "type": "string" },
+        "brief": { "type": "string" }
+      },
+      "required": ["ownerUserID", "projectName"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Zign Kanban Task",
+      "type": "object",
+      "properties": {
+        "ownerUserID": { "type": "string" },
+        "ownerProjectID": { "type": "string" },
+        "taskName": { "type": "string" },
+        "status": { "type": "string" },
+        "currentDrawingId": { "type": "string" }
+      },
+      "required": ["ownerUserID", "taskName", "status"]
+    },
+    "File": {
+      "title": "File",
+      "description": "Task Attached Drawing File",
+      "type": "object",
+      "properties": {
+        "ownerUserID": { "type": "string" },
+        "ownerTaskID": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileURL": { "type": "string" }
+      },
+      "required": ["ownerUserID", "ownerTaskID", "fileName", "fileURL"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Visual Pin Comment on Canvas",
+      "type": "object",
+      "properties": {
+        "ownerUserID": { "type": "string" },
+        "ownerTaskID": { "type": "string" },
+        "ownerFileID": { "type": "string" },
+        "text": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "author": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["ownerUserID", "ownerTaskID", "text"]
+    },
+    "ProjectGuest": {
+      "title": "ProjectGuest",
+      "description": "Guest permissions for projects",
+      "type": "object",
+      "properties": {
+        "ownerUserID": { "type": "string" },
+        "guestEmail": { "type": "string" },
+        "projectId": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["ownerUserID", "guestEmail", "projectId"]
+    },
+    "Drawing": {
+      "title": "Drawing",
+      "description": "SPen Canvas Drawing Data",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "ownerUserID": { "type": "string" },
+        "ownerTaskID": { "type": "string" },
+        "title": { "type": "string" },
+        "dataUrl": { "type": "string" },
+        "strokes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "dataUrl"]
     }
   },
   "firestore": {
-    "drawings": {
-      "schema": "Drawing",
-      "description": "Collection of drawings"
-    }
+    "users": { "schema": "User", "description": "Users collection" },
+    "clients": { "schema": "Client", "description": "Clients collection" },
+    "projects": { "schema": "Project", "description": "Projects collection" },
+    "tasks": { "schema": "Task", "description": "Tasks collection" },
+    "files": { "schema": "File", "description": "Files collection" },
+    "comments": { "schema": "Comment", "description": "Comments collection with canvas coordinates" },
+    "projectGuests": { "schema": "ProjectGuest", "description": "Project guests collection" },
+    "drawings": { "schema": "Drawing", "description": "Canvas drawings collection" }
   }
 }

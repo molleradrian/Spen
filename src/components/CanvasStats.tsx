@@ -15,7 +15,7 @@ import {
   Maximize2, 
   Minimize2
 } from 'lucide-react';
-import { Point, Stroke, DrawingLayer } from '../App';
+import { Point, Stroke, DrawingLayer } from '../types';
 
 // CSS density factor assuming ~96 DPI screen
 // 1 px = approx 0.264583 mm

@@ -121,6 +121,50 @@ app.post("/api/gemini/inspire", async (req, res) => {
   }
 });
 
+app.post("/api/gemini/brand-inspiration", async (req, res) => {
+  try {
+    const { brandDNA, projectBrief, taskName, prompt, imageData } = req.body;
+
+    let parts: any[] = [];
+
+    if (imageData && imageData.includes(",")) {
+      const base64Data = imageData.split(',')[1];
+      parts.push({
+        inlineData: {
+          mimeType: "image/png",
+          data: base64Data,
+        }
+      });
+    }
+
+    const sysPrompt = `You are the Penzign AI Design Director & Inspiration Engine.
+You assist creative designers, illustrators, and brand managers working in Penzign Creative Studio.
+
+Context:
+- Client Brand DNA: "${brandDNA || 'Modern minimalist aesthetic, bold colors'}"
+- Project Brief: "${projectBrief || 'General Creative Suite Project'}"
+- Active Task: "${taskName || 'Concept Sketch & Design'}"
+
+User Request / Prompt: "${prompt || 'Suggest 3 creative directions, color palettes, or layout concepts based on the Brand DNA and active task.'}"
+
+Provide actionable, inspiring, concise design suggestions, color guidance (referencing Canon colors #610061 MAX ENTROPY, #ff0000 MIN ENTROPY, #007aff, #617700 where relevant), and creative task ideas. Format with clean bullet points.`;
+
+    parts.push({ text: sysPrompt });
+
+    const response = await generateContentWithRetry(ai, {
+      model: "gemini-3.5-flash",
+      contents: { parts }
+    });
+
+    res.json({ text: response?.text || "No inspiration output generated." });
+  } catch (error: any) {
+    console.error("Brand Inspiration Gemini Error:", error);
+    res.status(500).json({
+      error: error?.message || "Internal server error during inspiration generation."
+    });
+  }
+});
+
 app.post("/api/gemini/android-developer", async (req, res) => {
   try {
     const { mode, language, prompt, imageData, layersSummary } = req.body;
