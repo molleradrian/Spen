@@ -294,23 +294,25 @@ export default function App() {
       const u = await signIn();
       return u;
     } catch (err: any) {
-      console.error("Authentication failed:", err);
       const errMsg = err?.message || String(err);
       
       if (
         errMsg.includes("popup-closed-by-user") || 
         errMsg.includes("cancelled-by-user") ||
+        errMsg.includes("cancelled-popup-request") ||
         errMsg.includes("popup-blocked") ||
         (window.self !== window.top)
       ) {
+        console.warn("Authentication popup closed/cancelled or restricted in iframe:", errMsg);
         setAuthError(
           "Standard Google authentication popups and third-party session cookies are blocked or fail to communicate inside cross-origin preview iframes. To authenticate and save your drawings securely, you just need to open this application in a top-level window (new tab)."
         );
       } else {
+        console.error("Authentication failed:", err);
         setAuthError(errMsg);
       }
       setShowAuthErrorModal(true);
-      throw err;
+      return null;
     }
   };
 

@@ -21,7 +21,8 @@ import {
   Calendar,
   Layers,
   Palette,
-  FileSignature
+  FileSignature,
+  MessageSquare
 } from 'lucide-react';
 import { db } from '../firebase';
 import { 
@@ -87,6 +88,23 @@ interface GmailMessageDetail {
   date?: string;
 }
 
+// Google Chat Types
+interface GoogleChatSpace {
+  name: string; // e.g. "spaces/AAAAxxx"
+  displayName?: string;
+  spaceType?: string;
+}
+
+interface GoogleChatMessage {
+  name: string;
+  text?: string;
+  sender?: {
+    displayName?: string;
+    avatarUrl?: string;
+  };
+  createTime?: string;
+}
+
 const KEEP_COLORS = [
   { name: 'Default', value: 'bg-zinc-950/40 border-white/10 text-white' },
   { name: 'Red Accent', value: 'bg-red-950/45 border-red-500/20 text-red-100' },
@@ -104,11 +122,12 @@ export default function WorkspaceHub({
   activeDataUrl,
   onReauthorize
 }: WorkspaceHubProps) {
-  const [activeTab, setActiveTab] = useState<'keep' | 'tasks' | 'gmail'>('keep');
+  const [activeTab, setActiveTab] = useState<'keep' | 'tasks' | 'gmail' | 'chat'>('keep');
   
   // Error notifications state
   const [gmailError, setGmailError] = useState<string | null>(null);
   const [tasksError, setTasksError] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const triggerReauthorize = async () => {
     if (!onReauthorize) return;
@@ -117,6 +136,7 @@ export default function WorkspaceHub({
       if (newToken) {
         setGmailError(null);
         setTasksError(null);
+        setChatError(null);
       }
     } catch (e: any) {
       alert(`Authorization failed: ${e.message || e}`);
@@ -508,6 +528,156 @@ export default function WorkspaceHub({
     }
   };
 
+  // --- Google Chat State & API Callbacks ---
+  const [chatSpaces, setChatSpaces] = useState<GoogleChatSpace[]>([]);
+  const [selectedSpaceName, setSelectedSpaceName] = useState<string>('');
+  const [chatMessages, setChatMessages] = useState<GoogleChatMessage[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [newChatMessage, setNewChatMessage] = useState('');
+  const [attachCurrentCanvasInChat, setAttachCurrentCanvasInChat] = useState(true);
+  const [isSendingChatMessage, setIsSendingChatMessage] = useState(false);
+  const [chatStatusMessage, setChatStatusMessage] = useState<string | null>(null);
+  const [newSpaceDisplayName, setNewSpaceDisplayName] = useState('');
+  const [isCreatingSpace, setIsCreatingSpace] = useState(false);
+
+  const fetchChatSpaces = useCallback(async () => {
+    if (!driveToken) return;
+    setIsChatLoading(true);
+    setChatError(null);
+    try {
+      const res = await fetch('https://chat.googleapis.com/v1/spaces', {
+        headers: { Authorization: `Bearer ${driveToken}` }
+      });
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          throw new Error('Access denied. Please authorize Google Chat permissions by clicking Grant below.');
+        }
+        throw new Error('Could not fetch Google Chat spaces');
+      }
+      const data = await res.json();
+      const spaces: GoogleChatSpace[] = data.spaces || [];
+      setChatSpaces(spaces);
+      if (spaces.length > 0) {
+        setSelectedSpaceName(prev => prev || spaces[0].name);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setChatError(err.message || 'Could not fetch Google Chat spaces');
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [driveToken]);
+
+  const fetchMessagesForSpace = useCallback(async (spaceName: string) => {
+    if (!driveToken || !spaceName) return;
+    setIsChatLoading(true);
+    setChatError(null);
+    try {
+      const res = await fetch(`https://chat.googleapis.com/v1/${spaceName}/messages?pageSize=30`, {
+        headers: { Authorization: `Bearer ${driveToken}` }
+      });
+      if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          throw new Error('Access denied. Please authorize Google Chat permissions.');
+        }
+        throw new Error('Could not fetch space messages');
+      }
+      const data = await res.json();
+      setChatMessages(data.messages || []);
+    } catch (err: any) {
+      console.error(err);
+      setChatError(err.message || 'Could not fetch space messages');
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [driveToken]);
+
+  useEffect(() => {
+    if (selectedSpaceName && driveToken && activeTab === 'chat') {
+      fetchMessagesForSpace(selectedSpaceName);
+    }
+  }, [selectedSpaceName, driveToken, activeTab, fetchMessagesForSpace]);
+
+  const handleSendChatMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!driveToken || !selectedSpaceName) return;
+    if (!newChatMessage.trim()) {
+      alert("Please enter a chat message text.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Send message to Google Chat space "${selectedSpaceName}"?`);
+    if (!confirmed) return;
+
+    setIsSendingChatMessage(true);
+    setChatStatusMessage(null);
+
+    try {
+      let finalMsgText = newChatMessage;
+      if (attachCurrentCanvasInChat && activeDataUrl) {
+        finalMsgText += `\n\n🎨 [S Pen Canvas Export attached directly from Studio session]`;
+      }
+
+      const res = await fetch(`https://chat.googleapis.com/v1/${selectedSpaceName}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${driveToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text: finalMsgText })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error?.message || 'Failed to send message to Google Chat');
+      }
+
+      setNewChatMessage('');
+      setChatStatusMessage('💬 Message posted to Google Chat!');
+      fetchMessagesForSpace(selectedSpaceName);
+      setTimeout(() => setChatStatusMessage(null), 3000);
+    } catch (err: any) {
+      alert(`Google Chat dispatch failed: ${err.message || err}`);
+    } finally {
+      setIsSendingChatMessage(false);
+    }
+  };
+
+  const handleCreateChatSpace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!driveToken || !newSpaceDisplayName.trim()) return;
+
+    const confirmed = window.confirm(`Create a new Google Chat Space named "${newSpaceDisplayName.trim()}"?`);
+    if (!confirmed) return;
+
+    setIsCreatingSpace(true);
+    try {
+      const res = await fetch('https://chat.googleapis.com/v1/spaces', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${driveToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          spaceType: 'SPACE',
+          displayName: newSpaceDisplayName.trim()
+        })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error?.message || 'Could not create Google Chat Space');
+      }
+      const createdSpace = await res.json();
+      setNewSpaceDisplayName('');
+      alert(`Google Chat Space "${createdSpace.displayName || 'New Space'}" created!`);
+      fetchChatSpaces();
+    } catch (err: any) {
+      alert(`Failed to create Space: ${err.message || err}`);
+    } finally {
+      setIsCreatingSpace(false);
+    }
+  };
+
   // Initial downloads triggers for Workspace APIs
   useEffect(() => {
     if (driveToken && isOpen) {
@@ -517,8 +687,11 @@ export default function WorkspaceHub({
       if (activeTab === 'tasks' && taskLists.length === 0) {
         fetchTaskListsAndItems();
       }
+      if (activeTab === 'chat' && chatSpaces.length === 0) {
+        fetchChatSpaces();
+      }
     }
-  }, [driveToken, isOpen, activeTab, emails.length, taskLists.length, fetchRecentEmails, fetchTaskListsAndItems]);
+  }, [driveToken, isOpen, activeTab, emails.length, taskLists.length, chatSpaces.length, fetchRecentEmails, fetchTaskListsAndItems, fetchChatSpaces]);
 
   if (!isOpen) return null;
 
@@ -538,7 +711,7 @@ export default function WorkspaceHub({
             </div>
             <div>
               <h2 className="text-sm font-black tracking-widest uppercase">Workspace Integration Desk</h2>
-              <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest">Gmail, Google Tasks & Keep Notes</p>
+              <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest">Gmail, Google Tasks, Keep & Google Chat</p>
             </div>
           </div>
           
@@ -551,7 +724,7 @@ export default function WorkspaceHub({
         </div>
 
         {/* Modular Navigation Tabs */}
-        <div className="grid grid-cols-3 border-b border-white/10 bg-zinc-950/50 p-2 gap-2">
+        <div className="grid grid-cols-4 border-b border-white/10 bg-zinc-950/50 p-2 gap-2">
           <button
             onClick={() => setActiveTab('keep')}
             className={`py-3 px-4 rounded-xl flex items-center justify-center gap-2 font-bold uppercase text-[11px] tracking-wider transition-all ${
@@ -561,7 +734,7 @@ export default function WorkspaceHub({
             }`}
           >
             <FileText size={14} className="text-amber-500" />
-            Google Keep Notes
+            Google Keep
           </button>
 
           <button
@@ -585,19 +758,31 @@ export default function WorkspaceHub({
             }`}
           >
             <Mail size={14} className="text-emerald-500" />
-            Gmail Dispatcher
+            Gmail
+          </button>
+
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`py-3 px-4 rounded-xl flex items-center justify-center gap-2 font-bold uppercase text-[11px] tracking-wider transition-all ${
+              activeTab === 'chat' 
+                ? 'bg-zinc-800 text-purple-400 shadow' 
+                : 'text-zinc-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <MessageSquare size={14} className="text-purple-400" />
+            Google Chat
           </button>
         </div>
 
         {/* Global Google Status check */}
-        {!driveToken && (activeTab === 'tasks' || activeTab === 'gmail') ? (
+        {!driveToken && (activeTab === 'tasks' || activeTab === 'gmail' || activeTab === 'chat') ? (
           <div className="bg-amber-950/30 border-y border-amber-900/15 px-6 py-4 flex flex-col sm:flex-row items-center gap-4 justify-between text-left">
             <div className="flex items-center gap-3">
               <AlertCircle className="text-amber-500 shrink-0" size={20} />
               <div>
                 <h4 className="text-xs font-bold uppercase text-amber-400 tracking-wider">Cloud Auth Offline</h4>
                 <p className="text-[10px] text-zinc-400 max-w-xl leading-relaxed">
-                  Gmail and Google Tasks require live API token access to synchronize with your Workspace. Link your Google account to authorize secure communication.
+                  Gmail, Google Tasks, and Google Chat require live API token access to synchronize with your Workspace. Link your Google account to authorize secure communication.
                 </p>
               </div>
             </div>
@@ -610,14 +795,14 @@ export default function WorkspaceHub({
               </button>
             )}
           </div>
-        ) : (gmailError || tasksError) && (activeTab === 'gmail' || activeTab === 'tasks') ? (
+        ) : (gmailError || tasksError || chatError) && (activeTab === 'gmail' || activeTab === 'tasks' || activeTab === 'chat') ? (
           <div className="bg-red-950/20 border-y border-red-900/15 px-6 py-4 flex flex-col sm:flex-row items-center gap-4 justify-between text-left">
             <div className="flex items-center gap-3">
               <AlertCircle className="text-red-400 shrink-0" size={20} />
               <div>
                 <h4 className="text-xs font-bold uppercase text-red-400 tracking-wider">Additional Permissions Required</h4>
                 <p className="text-[10px] text-zinc-400 max-w-xl leading-relaxed">
-                  The Google account is connected, but Gmail or Google Tasks permissions haven't been granted yet. Grant these scopes to begin editing tasks and emailing sketches.
+                  The Google account is connected, but Workspace permissions haven't been granted yet. Grant these scopes to use Gmail, Tasks, and Google Chat.
                 </p>
               </div>
             </div>
@@ -1202,6 +1387,206 @@ export default function WorkspaceHub({
                               </div>
                               <h4 className="text-xs font-bold text-white group-hover:text-emerald-300 transition-colors">{e.subject}</h4>
                               <p className="text-[10px] text-zinc-400 truncate line-clamp-1">{e.snippet}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </motion.div>
+            )}
+
+            {/* 4. GOOGLE CHAT TAB */}
+            {activeTab === 'chat' && (
+              <motion.div 
+                key="chat-tab"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="h-full grid grid-cols-1 lg:grid-cols-12 overflow-hidden"
+              >
+                {!driveToken ? (
+                  <div className="col-span-12 flex flex-col items-center justify-center p-8 text-center min-h-[300px]">
+                    <MessageSquare size={36} className="text-zinc-600 mb-2 animate-pulse" />
+                    <h3 className="text-xs uppercase font-extrabold text-zinc-500">Google Connection Offline</h3>
+                    <p className="text-[10px] text-zinc-400 max-w-sm mt-1.5 leading-relaxed">
+                      Connect your account on the Cloud Drive panel to interact with Google Chat spaces and messages.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Space selection & message composer */}
+                    <div className="lg:col-span-5 border-r border-white/10 p-6 overflow-y-auto touch-auto space-y-6 bg-zinc-950/20">
+                      <div className="space-y-1">
+                        <h3 className="text-xs font-bold text-purple-400 uppercase tracking-widest">Google Chat Dispatcher</h3>
+                        <p className="text-[10px] uppercase font-mono text-zinc-500 tracking-wider">Send messages & artwork to Chat Spaces</p>
+                      </div>
+
+                      {/* Select active space */}
+                      <div>
+                        <label className="text-[9px] font-mono text-zinc-400 uppercase tracking-widest block mb-1 font-bold">Select Chat Space</label>
+                        {isChatLoading && chatSpaces.length === 0 ? (
+                          <div className="flex items-center gap-2 p-2.5 bg-zinc-950/50 rounded-xl border border-white/10 text-xs text-zinc-500">
+                            <Loader2 size={12} className="animate-spin" />
+                            Loading Chat spaces...
+                          </div>
+                        ) : chatSpaces.length === 0 ? (
+                          <p className="text-[10px] text-zinc-500 font-mono">No spaces found. Create one below!</p>
+                        ) : (
+                          <select
+                            value={selectedSpaceName}
+                            onChange={(e) => setSelectedSpaceName(e.target.value)}
+                            className="w-full bg-zinc-950 border border-white/10 text-xs py-2 px-3 rounded-xl focus:outline-none text-zinc-300 font-bold"
+                          >
+                            {chatSpaces.map(s => (
+                              <option key={s.name} value={s.name}>
+                                {s.displayName || s.name} ({s.spaceType || 'SPACE'})
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      {/* Post message form */}
+                      <form onSubmit={handleSendChatMessage} className="space-y-4 pt-1">
+                        <div>
+                          <label className="text-[9px] font-mono text-zinc-400 uppercase tracking-widest block mb-1">Message Text <span className="text-red-500">*</span></label>
+                          <textarea
+                            required
+                            value={newChatMessage}
+                            onChange={(e) => setNewChatMessage(e.target.value)}
+                            rows={3}
+                            placeholder="Share an update or feedback with the team..."
+                            className="w-full bg-zinc-950 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder:text-zinc-650 focus:outline-none focus:border-white/20 transition-colors resize-none"
+                          />
+                        </div>
+
+                        {activeDataUrl && (
+                          <label className="flex items-center gap-2.5 px-3 py-2 border border-purple-500/15 bg-purple-950/15 hover:bg-purple-950/25 rounded-xl cursor-pointer select-none transition-colors">
+                            <input 
+                              type="checkbox" 
+                              className="accent-purple-500 scale-105"
+                              checked={attachCurrentCanvasInChat}
+                              onChange={(e) => setAttachCurrentCanvasInChat(e.target.checked)}
+                            />
+                            <div className="text-[9.5px]">
+                              <span className="text-purple-400 font-bold uppercase font-mono block">Attach Canvas Export Notice</span>
+                              <span className="text-zinc-400">Includes current canvas session reference in message</span>
+                            </div>
+                          </label>
+                        )}
+
+                        <button
+                          type="submit"
+                          disabled={isSendingChatMessage || !selectedSpaceName}
+                          className="w-full flex items-center justify-center gap-2 py-3 bg-white text-black font-black uppercase text-xs tracking-wider hover:bg-neutral-200 transition-all rounded-xl disabled:opacity-40"
+                        >
+                          {isSendingChatMessage ? (
+                            <>
+                              <Loader2 size={14} className="animate-spin text-black" />
+                              <span>Sending to Google Chat...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Send size={14} />
+                              <span>Post to Google Chat</span>
+                            </>
+                          )}
+                        </button>
+                      </form>
+
+                      {chatStatusMessage && (
+                        <div className="p-3 rounded-xl bg-purple-950/30 text-purple-300 border border-purple-900/40 text-[9.5px] font-mono text-center font-bold">
+                          {chatStatusMessage}
+                        </div>
+                      )}
+
+                      {/* Create Space section */}
+                      <div className="pt-4 border-t border-white/10 space-y-3">
+                        <span className="text-[9px] font-mono text-zinc-400 uppercase tracking-widest block font-bold">Create New Chat Space</span>
+                        <form onSubmit={handleCreateChatSpace} className="flex gap-2">
+                          <input 
+                            type="text" 
+                            value={newSpaceDisplayName}
+                            onChange={(e) => setNewSpaceDisplayName(e.target.value)}
+                            placeholder="Space Display Name"
+                            className="flex-1 bg-zinc-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-zinc-650 focus:outline-none"
+                          />
+                          <button
+                            type="submit"
+                            disabled={isCreatingSpace || !newSpaceDisplayName.trim()}
+                            className="bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs px-3 py-2 rounded-xl transition-colors disabled:opacity-40 flex items-center gap-1.5"
+                          >
+                            {isCreatingSpace ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                            <span>Create</span>
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+
+                    {/* Messages Feed */}
+                    <div className="lg:col-span-7 p-6 overflow-y-auto touch-auto space-y-4">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h3 className="text-xs font-black uppercase tracking-widest text-zinc-300">Space Messages Feed</h3>
+                          <p className="text-[9px] text-zinc-400 uppercase font-mono tracking-widest mt-0.5">Live conversation thread</p>
+                        </div>
+                        {selectedSpaceName && (
+                          <button
+                            onClick={() => fetchMessagesForSpace(selectedSpaceName)}
+                            className="text-[9.5px] uppercase font-bold text-zinc-400 hover:text-white pb-0.5 border-b border-dashed border-white/20 transition-all"
+                          >
+                            Refresh Thread
+                          </button>
+                        )}
+                      </div>
+
+                      {chatError ? (
+                        <div className="border border-red-500/10 bg-red-950/20 p-8 rounded-3xl text-center flex flex-col items-center justify-center space-y-4">
+                          <AlertCircle className="text-red-400" size={32} />
+                          <div className="space-y-1">
+                            <h4 className="text-xs uppercase font-extrabold text-zinc-300">Could Not Load Messages</h4>
+                            <p className="text-[9.5px] text-zinc-400 max-w-sm leading-relaxed">{chatError}</p>
+                          </div>
+                          {onReauthorize && (
+                            <button
+                              onClick={triggerReauthorize}
+                              className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-colors"
+                            >
+                              Sync & Grant Permissions
+                            </button>
+                          )}
+                        </div>
+                      ) : isChatLoading ? (
+                        <div className="py-24 text-center">
+                          <Loader2 size={24} className="animate-spin text-zinc-400 mx-auto mb-2" />
+                          <span className="text-[10px] uppercase font-mono text-zinc-500 tracking-wider">Syncing space messages...</span>
+                        </div>
+                      ) : chatMessages.length === 0 ? (
+                        <div className="border border-dashed border-white/10 py-24 rounded-3xl text-center">
+                          <MessageSquare size={24} className="text-zinc-700 mb-2" />
+                          <h4 className="text-xs uppercase font-extrabold text-zinc-500">No Messages Yet</h4>
+                          <p className="text-[9px] text-zinc-400 mt-1">Be the first to post a message to this Google Chat space.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {chatMessages.map(msg => (
+                            <div 
+                              key={msg.name}
+                              className="p-3.5 rounded-2xl bg-zinc-950/45 border border-white/5 hover:border-white/10 transition-all text-left space-y-1"
+                            >
+                              <div className="flex justify-between items-start gap-4">
+                                <span className="text-[10px] font-black uppercase tracking-wider text-purple-400 truncate">
+                                  {msg.sender?.displayName || 'User'}
+                                </span>
+                                {msg.createTime && (
+                                  <span className="text-[8.5px] font-mono text-zinc-500 uppercase">
+                                    {new Date(msg.createTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-zinc-200 leading-relaxed whitespace-pre-wrap">{msg.text || '(Empty Message)'}</p>
                             </div>
                           ))}
                         </div>
